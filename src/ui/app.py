@@ -1,7 +1,11 @@
 import base64
 import json
+import sys
 import tempfile
 from pathlib import Path
+
+# Assure que la racine du projet est dans le path (nécessaire sur Windows)
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import streamlit as st
 
@@ -29,7 +33,9 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-*, body { font-family: 'Inter', sans-serif !important; }
+/* Appliquer Inter via héritage — sans !important sur * pour ne pas écraser les fonts Material Symbols de Streamlit */
+html, body { font-family: 'Inter', sans-serif !important; }
+* { font-family: inherit; }
 
 /* Masquer la barre Streamlit par défaut */
 [data-testid="stHeader"],
@@ -60,7 +66,7 @@ section[data-testid="stSidebar"] {
     font-size: 10px !important;
     font-weight: 700 !important;
     letter-spacing: 1.6px !important;
-    color: #4d6d97 !important;
+    color: #ffffff !important;
     text-transform: uppercase !important;
     padding: 0 14px !important;
     margin-bottom: 4px !important;
@@ -73,7 +79,7 @@ section[data-testid="stSidebar"] {
     border-radius: 4px !important;
     font-size: 12.5px !important;
     font-weight: 500 !important;
-    color: #95b5d9 !important;
+    color: #ffffff !important;
     cursor: pointer !important;
     border: none !important;
     transition: background 0.12s, color 0.12s !important;
@@ -88,6 +94,13 @@ section[data-testid="stSidebar"] {
     color: #ffffff !important;
     font-weight: 600 !important;
 }
+/* Forcer blanc sur tous les éléments enfants des labels menu */
+[data-testid="stSidebar"] .stRadio > div > label p,
+[data-testid="stSidebar"] .stRadio > div > label span,
+[data-testid="stSidebar"] .stRadio > div > label div {
+    color: #ffffff !important;
+}
+
 /* Pastille radio */
 .stRadio > div > label > div:first-child {
     border-color: #4d6d97 !important;
@@ -155,6 +168,13 @@ h3 {
     font-size: 12px !important;
     font-weight: 600 !important;
 }
+h4 {
+    color: #001e4a !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    margin-top: 16px !important;
+    margin-bottom: 6px !important;
+}
 p, .stMarkdown p { font-size: 13px !important; color: #2c3e50 !important; line-height: 1.6 !important; }
 
 /* ── Formulaires ───────────────────────────────────────────────────── */
@@ -171,6 +191,7 @@ p, .stMarkdown p { font-size: 13px !important; color: #2c3e50 !important; line-h
     border-radius: 5px !important;
     font-size: 13px !important;
     background: #fafcff !important;
+    color: #1a2a40 !important;
 }
 .stTextInput input:focus, .stTextArea textarea:focus {
     border-color: #4a90e2 !important;
@@ -189,6 +210,9 @@ p, .stMarkdown p { font-size: 13px !important; color: #2c3e50 !important; line-h
     letter-spacing: 0.2px !important;
     transition: background 0.15s !important;
 }
+.stButton > button p,
+.stButton > button span,
+.stButton > button div { color: #ffffff !important; }
 .stButton > button:hover { background: #003070 !important; }
 
 .stDownloadButton > button {
@@ -226,14 +250,10 @@ p, .stMarkdown p { font-size: 13px !important; color: #2c3e50 !important; line-h
 }
 
 /* ── Expanders ─────────────────────────────────────────────────────── */
-details > summary {
+[data-testid="stExpander"] {
     background: #f7fafd !important;
     border: 1px solid #dde8f5 !important;
     border-radius: 5px !important;
-    font-size: 12.5px !important;
-    font-weight: 500 !important;
-    color: #001e4a !important;
-    padding: 9px 14px !important;
 }
 
 /* ── Uploader ──────────────────────────────────────────────────────── */
@@ -282,7 +302,7 @@ with st.sidebar:
             </div>
             <div>
                 <div style="font-size:14px;font-weight:700;color:#ffffff;letter-spacing:0.4px;">HAKILI LAB</div>
-                <div style="font-size:10px;color:#4d6d97;margin-top:2px;font-weight:400;">Évaluation IA · Mathématiques</div>
+                <div style="font-size:10px;color:#7a9fc8;margin-top:2px;font-weight:400;">Évaluation IA · Maths 3e / Tle</div>
             </div>
         </div>
     </div>
@@ -308,7 +328,7 @@ def _page_header(title: str, subtitle: str = "") -> None:
             <div class="pheader-title">{title}</div>
             {sub}
         </div>
-        <div class="pheader-badge">Mathématiques · Barème 0/1</div>
+        <div class="pheader-badge">Maths · 3e / Tle · Barème 0/1</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -321,6 +341,9 @@ def _save_upload(uploaded_file, dest: Path) -> Path:
 def _parse_rubric_text(rubric_text: str):
     from src.models.domain import Rubric, RubricItem
     rubric_text = rubric_text.strip()
+    if not rubric_text:
+        # Barème vide → l'IA identifie et note automatiquement chaque question
+        return Rubric(subject="mathematics", total_points=0, items=[])
     if rubric_text.startswith("{"):
         data = json.loads(rubric_text)
         return Rubric(**data)
@@ -358,9 +381,9 @@ def _display_results(result, show_corr_download: bool = True) -> None:
 
     st.markdown("#### Détail par question")
     for q in grade.questions:
-        icon = "✅" if q.score == 1 else "❌"
-        review_tag = " · ⚠ Révision requise" if q.requires_review else ""
-        with st.expander(f"{icon} {q.rubric_item_id} — {q.score}/1  (confiance {q.confidence:.0%}){review_tag}"):
+        icon = "✓" if q.score == 1 else "✗"
+        review_tag = " · Révision requise" if q.requires_review else ""
+        with st.expander(f"{icon}  {q.rubric_item_id} — {q.score}/1  (confiance {q.confidence:.0%}){review_tag}"):
             st.markdown(f"**Réponse observée :** {q.observed_answer}")
             st.markdown(f"**Commentaire :** {q.comment}")
 
@@ -422,7 +445,8 @@ if page == "À PROPOS":
         st.markdown("## Objectif")
         st.markdown(
             "**Hakili Lab** est une plateforme d'évaluation et de remédiation assistée par IA "
-            "pour copies manuscrites de **mathématiques**. "
+            "pour copies manuscrites de **mathématiques**, conçue pour le programme "
+            "du secondaire au Burkina Faso (**3e et Terminale**). "
             "Elle fournit aux enseignants une correction fiable, rapide et pédagogique."
         )
 
@@ -484,26 +508,27 @@ elif page == "TRAITEMENT UNIQUE":
             key="single_copy",
             help="PDF multi-pages ou image",
         )
-        subject_text = st.text_area(
-            "Énoncé",
-            height=110,
-            placeholder="Collez ici le texte de l'énoncé…",
+        subject_file = st.file_uploader(
+            "Énoncé (optionnel)",
+            type=["pdf", "jpg", "jpeg", "png"],
+            key="single_subject",
+            help="PDF ou image de l'énoncé. Laisser vide si non disponible.",
         )
         rubric_text = st.text_area(
-            "Barème",
+            "Barème (optionnel)",
             height=110,
-            placeholder="Q1 : Calculer la dérivée\nQ2a : Montrer que f(0)=0\n\nOu JSON Rubric complet.",
-            help="Une question par ligne au format 'ID : libellé', ou JSON Rubric.",
+            placeholder="Q1 : Résoudre le système d'équations\nQ2a : Calculer la limite de f en +∞\nQ2b : Étudier la dérivabilité de f en 0\n\nSi vide : l'IA détecte et note automatiquement chaque question (0/1).",
+            help="Une question par ligne au format 'ID : libellé', ou JSON Rubric. Laisser vide = détection automatique.",
         )
 
     with col_config:
         st.markdown("#### Élève")
         student_name = st.text_input(
             "Nom de l'élève",
-            placeholder="Ex : Alice Dupont",
+            placeholder="Ex : Aminata Sawadogo",
             help="Sera anonymisé avant traitement",
         )
-        class_name = st.text_input("Classe / Groupe", placeholder="Ex : 1A")
+        class_name = st.text_input("Classe / Groupe", placeholder="Ex : 3e A")
         exam_date = st.date_input("Date de l'examen")
 
         st.markdown("#### Instructions expert")
@@ -524,8 +549,6 @@ elif page == "TRAITEMENT UNIQUE":
             st.error("Veuillez charger la copie de l'élève.")
         elif not student_name:
             st.error("Veuillez entrer le nom de l'élève.")
-        elif not rubric_text.strip():
-            st.error("Veuillez saisir le barème.")
         else:
             with st.spinner("Pipeline en cours…"):
                 try:
@@ -541,11 +564,16 @@ elif page == "TRAITEMENT UNIQUE":
                     with tempfile.TemporaryDirectory() as tmp:
                         tmp_path = Path(tmp) / copy_file.name
                         _save_upload(copy_file, tmp_path)
+                        subject_file_path = None
+                        if subject_file:
+                            subject_tmp = Path(tmp) / f"subject_{subject_file.name}"
+                            _save_upload(subject_file, subject_tmp)
+                            subject_file_path = subject_tmp
                         result = run_single_copy(
                             copy_id=copy_id,
                             file_path=tmp_path,
                             rubric=rubric,
-                            subject_text=subject_text or "(énoncé non fourni)",
+                            subject_file_path=subject_file_path,
                             expert_instructions=expert_instructions,
                             runs_dir=runs_dir,
                         )
@@ -563,8 +591,8 @@ elif page == "TRAITEMENT BATCH":
 
     col_a, col_b = st.columns(2, gap="large")
     with col_a:
-        exam_name = st.text_input("Nom du devoir / Examen", placeholder="Ex : Contrôle 1 — Algèbre")
-        class_select = st.text_input("Classe / Groupe", placeholder="Ex : 1A")
+        exam_name = st.text_input("Nom du devoir / Examen", placeholder="Ex : DS1 — Fonctions numériques  |  Composition T1 — Suites")
+        class_select = st.text_input("Classe / Groupe", placeholder="Ex : 3e A  |  Tle C")
     with col_b:
         exam_date = st.date_input("Date de l'examen")
         num_students = st.number_input("Nombre d'élèves attendus", min_value=1, max_value=500, value=30)
@@ -574,8 +602,17 @@ elif page == "TRAITEMENT BATCH":
 
     col_x, col_y = st.columns(2, gap="large")
     with col_x:
-        subject_text_batch = st.text_area("Énoncé", height=96, placeholder="Texte de l'énoncé…")
-        rubric_text_batch = st.text_area("Barème", height=96, placeholder="Q1 : …\nQ2a : …")
+        subject_file_batch = st.file_uploader(
+            "Énoncé (optionnel)",
+            type=["pdf", "jpg", "jpeg", "png"],
+            key="batch_subject",
+            help="PDF ou image de l'énoncé commun à toutes les copies.",
+        )
+        rubric_text_batch = st.text_area(
+            "Barème (optionnel)",
+            height=96,
+            placeholder="Q1 : …\nQ2a : …\n\nSi vide : détection automatique (0/1).",
+        )
     with col_y:
         expert_instructions_batch = st.text_area(
             "Instructions expert (optionnel)",
@@ -585,7 +622,7 @@ elif page == "TRAITEMENT BATCH":
 
     st.divider()
     st.markdown("#### Copies des élèves")
-    st.caption("Un fichier par élève, nommé avec le nom de l'élève (ex : `alice_dupont.pdf`).")
+    st.caption("Un fichier par élève, nommé avec le nom de l'élève (ex : `sawadogo_aminata.pdf`).")
     copies_folder = st.file_uploader(
         "PDFs ou images",
         type=["pdf", "jpg", "jpeg", "png"],
@@ -599,8 +636,6 @@ elif page == "TRAITEMENT BATCH":
     if st.button("Lancer le traitement batch", use_container_width=False):
         if not copies_folder:
             st.error("Veuillez charger au moins une copie.")
-        elif not rubric_text_batch.strip():
-            st.error("Veuillez saisir le barème.")
         elif not exam_name:
             st.error("Veuillez entrer le nom du devoir.")
         else:
@@ -617,6 +652,12 @@ elif page == "TRAITEMENT BATCH":
             progress = st.progress(0, text="Initialisation…")
 
             with tempfile.TemporaryDirectory() as tmp:
+                subject_file_path_batch = None
+                if subject_file_batch:
+                    subject_tmp_batch = Path(tmp) / f"subject_{subject_file_batch.name}"
+                    _save_upload(subject_file_batch, subject_tmp_batch)
+                    subject_file_path_batch = subject_tmp_batch
+
                 for i, uploaded in enumerate(copies_folder):
                     student_name_raw = (
                         Path(uploaded.name).stem.replace("_", " ").replace("-", " ").title()
@@ -630,7 +671,7 @@ elif page == "TRAITEMENT BATCH":
                             copy_id=copy_id,
                             file_path=tmp_path,
                             rubric=rubric,
-                            subject_text=subject_text_batch or "(énoncé non fourni)",
+                            subject_file_path=subject_file_path_batch,
                             expert_instructions=expert_instructions_batch,
                             runs_dir=runs_dir,
                         )
@@ -676,7 +717,7 @@ elif page == "TRAITEMENT BATCH":
                         if r.grade.questions else 0.0
                     )
                     has_review = any(q.requires_review for q in r.grade.questions)
-                    flag = "⚠" if has_review else "✓"
+                    flag = "!" if has_review else "✓"
                     label = (
                         f"{flag}  {r.copy_id} — "
                         f"{r.grade.total_score}/{r.grade.total_possible} pt(s)  "
@@ -685,8 +726,8 @@ elif page == "TRAITEMENT BATCH":
                     )
                     with st.expander(label):
                         for q in r.grade.questions:
-                            q_icon = "✅" if q.score == 1 else "❌"
-                            rtag = " · ⚠ révision" if q.requires_review else ""
+                            q_icon = "✓" if q.score == 1 else "✗"
+                            rtag = " · révision" if q.requires_review else ""
                             st.markdown(
                                 f"{q_icon} **{q.rubric_item_id}** — {q.score}/1 "
                                 f"(confiance {q.confidence:.0%}){rtag}"

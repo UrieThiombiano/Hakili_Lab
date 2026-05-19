@@ -49,23 +49,17 @@ def run_single_copy(
     copy_id: str,
     file_path: Path,
     rubric: Rubric,
-    subject_text: str,
+    subject_text: str = "",
+    subject_file_path: Path | None = None,
     expert_instructions: str = "",
     runs_dir: Path | None = None,
 ) -> PipelineResult:
-    """
-    Traite une copie complète (PDF ou image unique).
-
-    Args:
-        copy_id: Identifiant anonyme (ex. E-001).
-        file_path: Chemin vers le PDF ou l'image.
-        rubric: Barème Pydantic.
-        subject_text: Texte de l'énoncé (str brut).
-        expert_instructions: Instructions contextuelles optionnelles de l'enseignant.
-        runs_dir: Répertoire de sortie (défaut : settings.runs_dir).
-    """
     out = Path(runs_dir or settings.runs_dir)
     client = ClaudeClient()
+
+    if not subject_text.strip() and subject_file_path is not None:
+        logger.info("[%s] Extraction texte énoncé…", copy_id)
+        subject_text = client.extract_subject(subject_file_path)
 
     # 1. Ingestion ──────────────────────────────────────────────────────────────
     logger.info("[%s] Ingestion…", copy_id)
