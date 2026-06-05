@@ -1,36 +1,32 @@
 # Hakili Lab — Correction IA de copies manuscrites
 
 > Outil d'évaluation et de remédiation assistée par IA pour copies manuscrites de **mathématiques**,
-> conçu pour le programme du secondaire au **Burkina Faso (3e et Terminale)**.
+> conçu pour le programme du secondaire au **Burkina Faso (6e à Terminale)**.
 
 ---
 
 ## Vue d'ensemble
 
-Hakili Lab automatise la correction de copies manuscrites numérisées. L'enseignant charge une copie (scan ou photo), fournit l'énoncé et le barème, et obtient en retour un **rapport PDF structuré** avec note, commentaires question par question, diagnostic pédagogique et plan de remédiation personnalisé.
+Hakili Lab automatise la correction de copies manuscrites numérisées. L'enseignant charge une copie scannée (PDF multi-pages), fournit l'énoncé et le barème, et obtient un **rapport PDF structuré** avec note, commentaires question par question, diagnostic des causes profondes d'erreurs et sujet de remédiation personnalisé.
 
-Le système repose sur **Claude d'Anthropic** (vision multimodale) et applique un **barème binaire strict 0/1** — décision pédagogique volontaire pour garantir des résultats non ambigus et auditables.
+Le système repose sur une **architecture multi-provider** : chaque tâche est confiée au modèle offrant le meilleur rapport qualité/coût pour cette tâche spécifique. Il applique un **barème binaire strict 0/1** — décision pédagogique volontaire pour des résultats non ambigus et auditables.
 
-### Cas d'usage principaux
-
-| Mode | Description |
-|---|---|
-| **Copie unique** | Correction immédiate d'une seule copie, résultat affiché et téléchargeable |
-| **Batch** | Session multi-élèves : toutes les copies d'une classe traitées en séquence, avec synthèse globale |
+**Coût en production : ~$0.02/copie — ~$12/an pour une école standard (540 copies).**
 
 ---
 
 ## Fonctionnalités
 
-- **Ingestion flexible** — PDF multi-pages, JPG, PNG ; conversion automatique en images haute résolution (300 dpi)
-- **Contrôle qualité image** — détection du flou (variance du Laplacien), luminosité insuffisante, résolution minimale
-- **Transcription multimodale** — texte, formules mathématiques, schémas ; signalement des zones `[ILLISIBLE]` avec score de confiance par page
+- **Ingestion flexible** — PDF multi-pages, JPG, PNG
+- **Contrôle qualité image** — détection du flou (variance du Laplacien), luminosité, résolution minimale
+- **Transcription multimodale** — texte, formules mathématiques, schémas ; zones `[ILLISIBLE]` avec score de confiance par page
+- **Extraction automatique du barème** — upload d'un PDF barème, extraction structurée sans saisie manuelle
 - **Correction selon barème** — évaluation binaire 0/1 par question et sous-question avec commentaire pédagogique
-- **Instructions expert** — critères d'interprétation optionnels injectés dans le prompt pour affiner la précision sur un devoir spécifique
-- **Diagnostic pédagogique** — forces, lacunes par compétence, plan de remédiation priorisé sur 1 à 2 semaines
-- **Rapport PDF** — note, détail question par question, confiance IA, diagnostic, logo Hakili Lab
-- **Export JSON** — données structurées pour archivage ou traitement ultérieur
-- **Anonymisation automatique** — les copies sont traitées sous `E-001`, `E-002`… ; la fiche de correspondance `nom ↔ identifiant` est séparée et ne figure jamais dans les rapports
+- **Instructions expert optionnelles** — critères d'interprétation injectés dans le prompt pour affiner la correction
+- **Diagnostic des causes cachées** — identification des lacunes conceptuelles profondes derrière les erreurs visibles
+- **Sujet de remédiation personnalisé** — 5 exercices progressifs par lacune identifiée, en français académique
+- **Rapport PDF** — note, détail question par question, confiance IA, diagnostic, sujet de remédiation, logo Hakili Lab
+- **Export JSON** — données structurées complètes pour archivage ou traitement ultérieur
 - **Validation humaine** — l'enseignant valide sur le rapport PDF exporté, hors plateforme
 
 ---
@@ -38,47 +34,74 @@ Le système repose sur **Claude d'Anthropic** (vision multimodale) et applique u
 ## Architecture et pipeline
 
 ```
-Copie PDF / Image(s)
-        │
-        ▼
-┌───────────────┐
-│   Ingestion   │  PDF → images JPG (300 dpi) · nommage page_01, page_02…
-└───────┬───────┘
-        │
-        ▼
-┌───────────────────┐
-│  Qualité image    │  Flou · luminosité · résolution
-└───────┬───────────┘  ⚠ Avertissement si insuffisant (traitement poursuivi)
-        │
-        ▼
-┌─────────────────────────────────────────────────┐
-│  Transcription  (claude-opus-4-7)               │
-│  texte + formules + schémas + [ILLISIBLE]       │
-│  confiance par page · prompt caching activé     │
-└───────┬─────────────────────────────────────────┘
-        │
-        ▼
-┌──────────────────────────────────────────────────────────┐
-│  Correction  (claude-opus-4-7)                           │
-│  score 0/1 par question · commentaire · requires_review  │
-│  + instructions expert optionnelles                      │
-└───────┬──────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────┐
-│  Diagnostic  (claude-haiku-4-5)                 │
-│  forces · lacunes · compétences · remédiation   │
-└───────┬─────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────┐
-│  PDF + JSON + UI    │  Rapport · Export · Téléchargement
-└─────────────────────┘
+[Copie PDF multi-pages — scanner 150 DPI]
+               │
+               ▼
+    ┌──────────────────┐
+    │    Ingestion     │  PDF → images 150 DPI · nommage page_01, page_02…
+    └────────┬─────────┘
+             │
+             ▼
+    ┌──────────────────┐
+    │  Qualité image   │  Flou · luminosité · résolution
+    └────────┬─────────┘  ⚠ Avertissement si insuffisant
+             │
+             ▼
+    ┌────────────────────────────────────────────────┐
+    │  Transcription  (Gemini 2.0 Flash)             │
+    │  texte + formules + schémas + [ILLISIBLE]      │
+    │  3 pages/appel · tier gratuit 1M tokens/jour   │
+    └────────┬───────────────────────────────────────┘
+             │
+             ▼
+    ┌────────────────────────────────────────────────┐
+    │  Correction  (DeepSeek V3)                     │
+    │  score 0/1 · commentaire · requires_review     │
+    │  MATH-500 ~90% · meilleur raisonnement math    │
+    └────────┬───────────────────────────────────────┘
+             │
+             ▼
+    ┌────────────────────────────────────────────────┐
+    │  Diagnostic  (DeepSeek R1)                     │
+    │  causes cachées · compétences · remédiation    │
+    │  modèle de raisonnement chain-of-thought       │
+    └────────┬───────────────────────────────────────┘
+             │
+             ▼
+    ┌────────────────────────────────────────────────┐
+    │  Remédiation  (Mistral Small 3.1)              │
+    │  5 exercices/lacune · français académique      │
+    └────────┬───────────────────────────────────────┘
+             │
+             ▼
+    ┌─────────────────────┐
+    │   PDF + JSON + UI   │  Rapport · Export · Téléchargement
+    └─────────────────────┘
 ```
 
-**Deux modèles sont utilisés :**
-- `claude-opus-4-7` — tâches de raisonnement complexe (transcription, correction)
-- `claude-haiku-4-5` — tâches légères (diagnostic pédagogique) pour réduire la latence et le coût
+**Routing automatique :** si une clé API est absente ou si le provider échoue (quota épuisé, solde insuffisant, erreur réseau), le pipeline bascule sur Claude — aucune interruption.
+
+| Tâche | Fallback | Modèle Claude |
+|---|---|---|
+| Transcription | Claude | Sonnet 4.6 |
+| Correction | Claude | Sonnet 4.6 |
+| Diagnostic | Claude | Haiku 4.5 |
+| Remédiation | Claude | Sonnet 4.6 |
+
+---
+
+## Providers IA par tâche
+
+| Tâche | Provider | Modèle | Justification | Coût/copie |
+|---|---|---|---|---|
+| Transcription | **Google Gemini** | gemini-2.0-flash | Vision native, tier gratuit 1M tok/j | $0.00 |
+| Correction | **DeepSeek** | deepseek-chat (V3) | MATH-500 ~90%, meilleur score math | $0.005 |
+| Diagnostic | **DeepSeek** | deepseek-reasoner (R1) | Chain-of-thought, causes profondes | $0.008 |
+| Remédiation | **Mistral** | mistral-small-latest | Français académique natif | $0.003 |
+| Barème/Énoncé | **Claude** | claude-sonnet-4-6 | tool_use forcé, extraction fiable | $0.010 |
+| **Total** | | | | **~$0.02** |
+
+> Analyse complète : [docs/ai_providers_analysis.md](docs/ai_providers_analysis.md)
 
 ---
 
@@ -86,10 +109,13 @@ Copie PDF / Image(s)
 
 | Couche | Technologie |
 |---|---|
-| Interface | Streamlit 1.36 |
-| IA | Anthropic Claude (API officielle + SDK Python) |
+| Interface | Streamlit |
+| IA — Vision | Google Gemini 2.0 Flash |
+| IA — Raisonnement math | DeepSeek V3 + R1 (API compatible OpenAI) |
+| IA — Génération French | Mistral Small 3.1 |
+| IA — Extraction structurée | Anthropic Claude Sonnet 4.6 |
 | Modèles de données | Pydantic v2 + pydantic-settings |
-| PDF → images | PyMuPDF (fitz) |
+| PDF → images | PyMuPDF (fitz) · 150 DPI |
 | Qualité image | OpenCV + Pillow |
 | Génération PDF | ReportLab |
 | Retry API | Tenacity |
@@ -101,14 +127,14 @@ Copie PDF / Image(s)
 ## Prérequis
 
 - **Python 3.11 ou supérieur**
-- **Clé API Anthropic** — [console.anthropic.com](https://console.anthropic.com)
-- `make` optionnel — Linux/Mac natif · Windows : `winget install GnuWin32.Make`
+- **Clé API Anthropic** (obligatoire — fallback) — [console.anthropic.com](https://console.anthropic.com)
+- **Clé API Google AI Studio** (recommandé — tier gratuit) — [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- **Clé API DeepSeek** (recommandé) — [platform.deepseek.com](https://platform.deepseek.com/api_keys)
+- **Clé API Mistral** (recommandé) — [console.mistral.ai](https://console.mistral.ai/api-keys)
 
 ---
 
-## Démarrage rapide (après installation)
-
-Une fois le projet installé et `.env` configuré, voici les commandes à lancer à chaque session :
+## Démarrage rapide
 
 ### Windows (PowerShell)
 
@@ -120,22 +146,18 @@ Une fois le projet installé et `.env` configuré, voici les commandes à lancer
 streamlit run src\ui\app.py
 ```
 
-> Si PowerShell bloque l'exécution des scripts, lancer une fois :
-> `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
+> Si PowerShell bloque : `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ### Linux / Mac
 
 ```bash
-# 1. Activer l'environnement virtuel
 source .venv/bin/activate
-
-# 2. Lancer l'interface
 streamlit run src/ui/app.py
 # ou
 make run
 ```
 
-L'interface s'ouvre automatiquement sur `http://localhost:8501`.
+L'interface s'ouvre sur `http://localhost:8501`.
 
 ---
 
@@ -147,16 +169,12 @@ L'interface s'ouvre automatiquement sur `http://localhost:8501`.
 git clone <url-du-repo>
 cd hakili_ai_correction
 
-# Créer l'environnement virtuel et installer les dépendances
 python -m venv .venv
 .\.venv\Scripts\pip install --upgrade pip
 .\.venv\Scripts\pip install -r requirements.txt
 
-# Configurer la clé API
 Copy-Item .env.example .env
-# Ouvrir .env et renseigner ANTHROPIC_API_KEY
-
-# Lancer l'interface
+# Ouvrir .env et renseigner les clés API
 .\.venv\Scripts\streamlit.exe run src\ui\app.py
 ```
 
@@ -165,9 +183,9 @@ Copy-Item .env.example .env
 ```bash
 git clone <url-du-repo>
 cd hakili_ai_correction
-make setup          # crée .venv + installe les dépendances
+make setup
 cp .env.example .env
-# Éditer .env avec ANTHROPIC_API_KEY
+# Éditer .env avec les clés API
 make run
 ```
 
@@ -176,19 +194,29 @@ make run
 ## Configuration (`.env`)
 
 ```env
-# Obligatoire
+# ── Anthropic Claude (obligatoire — fallback + extraction) ───────────────────
 ANTHROPIC_API_KEY=sk-ant-...
+CLAUDE_MODEL_HEAVY=claude-sonnet-4-6
 
-# Modèles Claude (ne pas modifier sans raison valable)
-CLAUDE_MODEL_HEAVY=claude-opus-4-7            # transcription + correction
-CLAUDE_MODEL_LIGHT=claude-haiku-4-5-20251001  # diagnostic pédagogique
+# ── Google Gemini — transcription vision (GRATUIT jusqu'à 1M tokens/jour) ────
+# Clé gratuite : https://aistudio.google.com/apikey
+GOOGLE_API_KEY=AIza...
+VISION_PROVIDER=gemini          # "gemini" | "claude"
 
-# Seuils de qualité image
-CONFIDENCE_REVIEW_THRESHOLD=0.75   # en dessous : révision humaine requise
-IMAGE_MIN_RESOLUTION=1000          # pixels (largeur ou hauteur)
-IMAGE_BLUR_THRESHOLD=100.0         # variance Laplacien min
+# ── DeepSeek — correction (V3) + diagnostic (R1) ─────────────────────────────
+# Clé : https://platform.deepseek.com/api_keys
+DEEPSEEK_API_KEY=sk-...
 
-# Stockage local des sorties
+# ── Mistral — remédiation français académique ─────────────────────────────────
+# Clé : https://console.mistral.ai/api-keys
+MISTRAL_API_KEY=...
+
+# ── Seuils qualité image ──────────────────────────────────────────────────────
+CONFIDENCE_REVIEW_THRESHOLD=0.75
+IMAGE_MIN_RESOLUTION=1000
+IMAGE_BLUR_THRESHOLD=100.0
+
+# ── Stockage local ────────────────────────────────────────────────────────────
 RUNS_DIR=./runs
 ```
 
@@ -199,23 +227,13 @@ RUNS_DIR=./runs
 ### Mode Copie unique
 
 1. Aller sur l'onglet **Traitement unique**
-2. Charger la copie (PDF ou image)
+2. Charger la copie (PDF scanner recommandé, 150 DPI, niveaux de gris)
 3. Charger l'énoncé (optionnel — PDF ou image)
-4. Saisir le barème ligne par ligne (`Q1 : libellé`) ou laisser vide pour détection automatique
+4. Charger le barème (PDF) ou saisir ligne par ligne (`Q1 : libellé`)
 5. Renseigner le nom de l'élève et la classe
-6. Ajouter des instructions expert si nécessaire (ex : *"Accepter x = 0 même sans justification pour Q2b"*)
+6. Ajouter des instructions expert si nécessaire
 7. Cliquer **Lancer l'analyse**
-8. Télécharger le rapport PDF, le JSON ou la fiche de correspondance
-
-### Mode Batch
-
-1. Aller sur l'onglet **Traitement batch**
-2. Renseigner le nom du devoir (ex : `DS1 — Fonctions numériques`), la classe, la date
-3. Charger l'énoncé commun et le barème
-4. Charger toutes les copies (nommer les fichiers avec le nom de l'élève : `sawadogo_aminata.pdf`)
-5. Cliquer **Lancer le traitement batch**
-6. Consulter la synthèse de classe (moyenne, tableau de notes)
-7. Télécharger les rapports individuels et la fiche de correspondance
+8. Télécharger le rapport PDF
 
 ### Format du barème (saisie textuelle)
 
@@ -226,7 +244,17 @@ Q2b : Étudier la dérivabilité de f en 0
 Q3 : Tracer la courbe représentative
 ```
 
-Si le champ barème est laissé **vide**, Claude détecte automatiquement toutes les questions et attribue un score 0/1 à chacune.
+Si le champ barème est laissé vide, le système détecte automatiquement les questions.
+
+### Recommandation matériel de scan
+
+| Contexte | Recommandation | Réglages |
+|---|---|---|
+| Usage régulier | Scanner ADF (ex. Epson ES-65W ~$130) | 150 DPI · niveaux de gris · PDF |
+| Usage occasionnel | Multifonction école | 150 DPI · niveaux de gris · PDF |
+| Terrain / urgence | Smartphone + Microsoft Lens | Mode Document → PDF |
+
+> Analyse détaillée : [docs/input_pipeline_analysis.md](docs/input_pipeline_analysis.md)
 
 ---
 
@@ -237,54 +265,44 @@ hakili_ai_correction/
 │
 ├── src/
 │   ├── api/
-│   │   └── claude_client.py      # Client Anthropic : transcription, correction, diagnostic
-│   │                              # retry intelligent (529/429/timeout) · prompt caching
+│   │   ├── claude_client.py      # Claude : extraction barème/énoncé · fallback
+│   │   ├── gemini_client.py      # Gemini 2.0 Flash : transcription vision
+│   │   ├── deepseek_client.py    # DeepSeek V3 : correction · R1 : diagnostic
+│   │   └── mistral_client.py     # Mistral Small : remédiation français
 │   ├── core/
-│   │   ├── config.py             # Pydantic Settings (.env)
-│   │   └── anonymizer.py         # Numérotation E-001… + CSV de correspondance persistant
+│   │   ├── config.py             # Pydantic Settings (.env) — tous providers
+│   │   └── anonymizer.py         # Génération slug copy_id
 │   ├── models/
-│   │   └── domain.py             # Modèles Pydantic : Rubric, CopyGrade, TranscriptionResult…
+│   │   └── domain.py             # Modèles Pydantic : Rubric, CopyGrade, DiagnosticResult…
 │   ├── pipeline/
-│   │   ├── ingestion.py          # PDF → images haute résolution · multi-images
+│   │   ├── ingestion.py          # PDF → images 150 DPI · multi-images
 │   │   ├── image_quality.py      # Contrôle qualité (OpenCV + PIL)
-│   │   ├── pipeline.py           # Orchestrateur : ingestion → PDF export
+│   │   ├── pipeline.py           # Orchestrateur multi-provider avec routing automatique
 │   │   └── pdf_report.py         # Génération rapport PDF (ReportLab)
 │   └── ui/
-│       ├── app.py                # Interface Streamlit (Unique · Batch · À propos)
-│       └── hakili_logo.png       # Logo (en-tête PDF + sidebar)
+│       └── app.py                # Interface Streamlit
 │
 ├── prompts/
 │   ├── transcription_prompt.md   # Instructions transcription multimodale
 │   ├── grading_prompt.md         # Instructions correction selon barème
-│   └── diagnostic_prompt.md      # Instructions diagnostic + remédiation
-│
-├── data/
-│   └── schemas/                  # Schémas JSON de validation (Pydantic ↔ Claude)
-│       ├── transcription.schema.json
-│       ├── grading.schema.json
-│       ├── diagnostic.schema.json
-│       ├── rubric.schema.json
-│       ├── ingestion.schema.json
-│       └── claude_response.schema.json
-│
-├── tests/
-│   └── test_models.py            # Tests unitaires modèles Pydantic
+│   ├── diagnostic_prompt.md      # Instructions diagnostic causes cachées
+│   └── remediation_subject_prompt.md  # Instructions génération exercices
 │
 ├── docs/
-│   └── decision_register.md      # Registre des décisions structurantes (D-CEO-01…)
+│   ├── decision_register.md      # Registre des décisions structurantes
+│   ├── ai_providers_analysis.md  # Analyse comparative LLM par tâche
+│   └── input_pipeline_analysis.md # Analyse OCR vs LLM + format d'entrée optimal
+│
+├── tests/
+│   └── test_models.py
 │
 ├── runs/                         # Sorties pipeline (local · non versionné)
-│   └── <copy_id>/
-│       ├── pages/                # Images extraites
-│       ├── result.json           # Données structurées complètes
-│       └── rapport.pdf           # Rapport enseignant
 │
-├── .env.example                  # Template de configuration
-├── .env                          # Variables d'environnement (non versionné)
-├── requirements.txt              # Dépendances Python épinglées
-├── Makefile                      # Automatisation (setup · run · test · lint)
-├── setup.ps1                     # Script setup Windows alternatif
-└── CLAUDE.md                     # Instructions pour Claude Code (développement)
+├── .env.example
+├── .env
+├── requirements.txt
+├── Makefile
+└── CLAUDE.md
 ```
 
 ---
@@ -295,21 +313,14 @@ hakili_ai_correction/
 |---|---|
 | `make setup` | Créer le venv et installer les dépendances |
 | `make run` | Lancer l'interface Streamlit |
-| `make test` | Lancer les tests unitaires (pytest) |
+| `make test` | Lancer les tests unitaires |
 | `make lint` | Vérifier qualité du code (ruff + mypy) |
-| `make clean` | Nettoyer les caches Python |
 
 **Sans make (Windows) :**
 
 ```powershell
-# Tests
 .\.venv\Scripts\pytest tests/ -v
-
-# Linter
 .\.venv\Scripts\ruff check src/
-.\.venv\Scripts\mypy src/
-
-# Interface
 .\.venv\Scripts\streamlit.exe run src\ui\app.py
 ```
 
@@ -317,37 +328,28 @@ hakili_ai_correction/
 
 ## Décisions structurantes
 
-Registre complet : [docs/decision_register.md](docs/decision_register.md)
-
-| ID | Décision | Justification |
+| ID | Sujet | Décision |
 |---|---|---|
-| D-CEO-01 | Mathématiques uniquement pour le MVP | Réduire la complexité initiale ; extension possible |
-| D-CEO-02 | Barème binaire 0/1 strict | Résultats non ambigus, auditables, cohérents avec la pratique enseignante |
-| D-CEO-03 | Claude exclusivement (Anthropic) | Meilleure capacité de vision multimodale sur écriture manuscrite |
-| D-CEO-04 | Instructions expert optionnelles | Personnalisation sans modifier les prompts de base |
-| D-CEO-05 | Validation humaine hors plateforme | L'IA assiste, l'enseignant décide |
-| D-CEO-06 | Rapport PDF 7 éléments | Note · commentaires · révisions · diagnostic · remédiation · confiance · logo |
-| D-CEO-07 | Anonymisation automatique | Protection des données élèves dès le prototype |
-| D-CEO-09 | Deux modes d'interface | Copie unique (test rapide) + Batch (usage classe réel) |
+| D-CEO-01 | Matières et niveaux | Mathématiques, **6e à la Terminale** |
+| D-CEO-02 | Format barème | Binaire 0/1 par question et sous-question |
+| D-CEO-03 | Stratégie IA | **Multi-provider** avec routing automatique |
+| D-CEO-04 | Instructions expert | Couche optionnelle d'instructions contextuelles |
+| D-CEO-05 | Validation humaine | Hors plateforme (enseignant sur PDF exporté) |
+| D-CEO-07 | Identification | Nom réel de l'élève (slug technique pour fichiers) |
+| D-CEO-10 | Format entrée optimal | **PDF scanner 150 DPI** niveaux de gris |
+| D-CEO-11 | Coût cible | ~$0.02/copie · ~$12/an pour 540 copies |
 
----
-
-## Confidentialité et données
-
-- Toutes les données sont stockées **localement** dans `runs/` — aucun envoi cloud hors appels API Anthropic
-- Les noms d'élèves sont remplacés par `E-001`, `E-002`… **avant** tout envoi à l'API
-- La fiche de correspondance `nom ↔ identifiant` est un fichier CSV séparé, téléchargeable à part, jamais incluse dans les rapports PDF
-- Les logs ne contiennent aucune donnée personnelle identifiable
+Registre complet : [docs/decision_register.md](docs/decision_register.md)
 
 ---
 
 ## Limitations connues (prototype)
 
-- Copie très dégradée (photo floue, faible éclairage) → confiance IA réduite, révision humaine recommandée
-- Formules complexes (intégrales multiples, matrices) → transcription approximative possible
-- Écriture cursive dense → zones `[ILLISIBLE]` possibles
-- Pas de support multilingue (français uniquement)
-- Pas de déploiement cloud dans l'état actuel (stockage local uniquement)
+- Copie très dégradée (photo floue, faible éclairage) → confiance IA réduite
+- Formules très complexes (intégrales multiples, matrices) → transcription approximative possible
+- Écriture cursive très dense → zones `[ILLISIBLE]` possibles
+- Français uniquement
+- Stockage local uniquement (pas de déploiement cloud dans l'état)
 
 ---
 
@@ -355,9 +357,9 @@ Registre complet : [docs/decision_register.md](docs/decision_register.md)
 
 | Objectif | Cible |
 |---|---|
-| Précision correction (IA vs enseignant) | ≤ 1 point d'écart sur barème 10 pts, avec instructions expert |
-| Taux de révision humaine requise | < 15 % des questions |
-| Temps de traitement par copie | < 90 secondes |
+| Précision correction (IA vs enseignant) | ≤ 1 point d'écart sur barème 10 pts |
+| Taux de révision humaine requise | < 15% des questions |
+| Temps de traitement par copie | < 120 secondes |
 | Volume cible de validation | 100 copies réelles avec enseignant référent |
 
 ---

@@ -49,7 +49,7 @@ def ingest_pdf(pdf_path: Path, copy_id: str, output_dir: Path) -> IngestionResul
 
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
-        pix = page.get_pixmap(dpi=300)  # Haute résolution pour l'OCR
+        pix = page.get_pixmap(dpi=150)  # 150 DPI : optimal LLM vision (D-CEO-10)
 
         image_path = output_dir / f"page_{page_num + 1:02d}.jpg"
         pix.save(str(image_path))

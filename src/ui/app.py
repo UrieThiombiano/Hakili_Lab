@@ -1,5 +1,4 @@
 import base64
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -33,11 +32,9 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
-/* Appliquer Inter via héritage — sans !important sur * pour ne pas écraser les fonts Material Symbols de Streamlit */
 html, body { font-family: 'Inter', sans-serif !important; }
 * { font-family: inherit; }
 
-/* Masquer la barre Streamlit par défaut */
 [data-testid="stHeader"],
 [data-testid="stToolbar"],
 [data-testid="stDecoration"] { display: none !important; }
@@ -61,7 +58,6 @@ section[data-testid="stSidebar"] {
     padding: 0 !important;
 }
 
-/* Label "MENU" */
 .stRadio > label {
     font-size: 10px !important;
     font-weight: 700 !important;
@@ -71,8 +67,6 @@ section[data-testid="stSidebar"] {
     padding: 0 14px !important;
     margin-bottom: 4px !important;
 }
-
-/* Items du menu */
 .stRadio > div { gap: 1px !important; padding: 0 8px !important; }
 .stRadio > div > label {
     padding: 9px 10px !important;
@@ -94,14 +88,11 @@ section[data-testid="stSidebar"] {
     color: #ffffff !important;
     font-weight: 600 !important;
 }
-/* Forcer blanc sur tous les éléments enfants des labels menu */
 [data-testid="stSidebar"] .stRadio > div > label p,
 [data-testid="stSidebar"] .stRadio > div > label span,
 [data-testid="stSidebar"] .stRadio > div > label div {
     color: #ffffff !important;
 }
-
-/* Pastille radio */
 .stRadio > div > label > div:first-child {
     border-color: #4d6d97 !important;
 }
@@ -302,7 +293,7 @@ with st.sidebar:
             </div>
             <div>
                 <div style="font-size:14px;font-weight:700;color:#ffffff;letter-spacing:0.4px;">HAKILI LAB</div>
-                <div style="font-size:10px;color:#7a9fc8;margin-top:2px;font-weight:400;">Évaluation IA · Maths 3e / Tle</div>
+                <div style="font-size:10px;color:#7a9fc8;margin-top:2px;font-weight:400;">Évaluation IA · Maths 6e à la Tle</div>
             </div>
         </div>
     </div>
@@ -328,7 +319,7 @@ def _page_header(title: str, subtitle: str = "") -> None:
             <div class="pheader-title">{title}</div>
             {sub}
         </div>
-        <div class="pheader-badge">Maths · 3e / Tle · Barème 0/1</div>
+        <div class="pheader-badge">Maths · 6e → Tle · Barème 0/1</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -339,13 +330,13 @@ def _save_upload(uploaded_file, dest: Path) -> Path:
 
 
 def _parse_rubric_text(rubric_text: str):
+    import json as _json
     from src.models.domain import Rubric, RubricItem
     rubric_text = rubric_text.strip()
     if not rubric_text:
-        # Barème vide → l'IA identifie et note automatiquement chaque question
         return Rubric(subject="mathematics", total_points=0, items=[])
     if rubric_text.startswith("{"):
-        data = json.loads(rubric_text)
+        data = _json.loads(rubric_text)
         return Rubric(**data)
     items = []
     for i, line in enumerate(rubric_text.splitlines()):
@@ -359,13 +350,14 @@ def _parse_rubric_text(rubric_text: str):
     return Rubric(subject="mathematics", total_points=len(items), items=items)
 
 
-def _display_results(result, show_corr_download: bool = True) -> None:
+def _display_results(result, key_prefix: str = "") -> None:
     if not result.success:
         st.error(f"Pipeline échoué : {'; '.join(result.errors)}")
         return
 
     grade = result.grade
-    st.success(f"Correction terminée — **{grade.total_score}/{grade.total_possible}**")
+    student_label = result.student_name or result.copy_id
+    st.success(f"Correction terminée — **{student_label}** : **{grade.total_score}/{grade.total_possible}**")
 
     if result.quality.global_quality == "poor":
         st.warning("Qualité image insuffisante — vérifiez les pages signalées.")
@@ -401,37 +393,66 @@ def _display_results(result, show_corr_download: bool = True) -> None:
                 st.markdown("**Lacunes**")
                 for w in diag.weaknesses:
                     st.markdown(f"- {w}")
+
+        if diag.root_causes:
+            st.markdown("#### Erreurs cachées identifiées")
+            st.caption(
+                "Ces causes profondes expliquent plusieurs points perdus — "
+                "les corriger améliore la copie sur plusieurs questions à la fois."
+            )
+            for rc in diag.root_causes:
+                qs = ", ".join(rc.linked_questions) if rc.linked_questions else "—"
+                with st.expander(f"Questions {qs} — {rc.visible_error}"):
+                    st.markdown(f"**Cause cachée :** {rc.hidden_cause}")
+
         if diag.remediation_plan:
-            st.markdown("**Plan de remédiation**")
+            st.markdown("#### Plan de remédiation")
             for item in sorted(diag.remediation_plan, key=lambda x: x.priority):
                 st.markdown(f"{item.priority}. **{item.topic}** — {item.action}")
 
+    if result.remediation_subject and result.remediation_subject.exercises:
+        st.markdown("#### Sujet de remédiation (exercices)")
+        st.caption("5 exercices progressifs par lacune identifiée — inclus dans le rapport PDF.")
+        current_topic = None
+        for ex in result.remediation_subject.exercises:
+            if ex.topic != current_topic:
+                current_topic = ex.topic
+                st.markdown(f"**Série : {ex.topic}**")
+            with st.expander(f"Exercice {ex.number}"):
+                st.markdown(ex.question)
+                if ex.hint:
+                    st.caption(f"Aide : {ex.hint}")
+
+    # ── Téléchargements ───────────────────────────────────────────────────────
     st.markdown("#### Téléchargements")
-    col_pdf, col_json, col_corr = st.columns(3)
-    if result.pdf_path and result.pdf_path.exists():
-        col_pdf.download_button(
-            "📄 Rapport PDF",
-            data=result.pdf_path.read_bytes(),
-            file_name=f"rapport_{result.copy_id}.pdf",
-            mime="application/pdf",
-        )
-    if result.json_path and result.json_path.exists():
-        col_json.download_button(
-            "📦 Export JSON",
-            data=result.json_path.read_text(encoding="utf-8"),
-            file_name=f"result_{result.copy_id}.json",
-            mime="application/json",
-        )
-    if show_corr_download:
-        from src.core.config import settings
-        corr_path = Path(settings.runs_dir) / "sessions" / "correspondence.csv"
-        if corr_path.exists():
-            col_corr.download_button(
-                "🔒 Fiche correspondance",
-                data=corr_path.read_text(encoding="utf-8"),
-                file_name="correspondance.csv",
-                mime="text/csv",
+    kid = key_prefix or result.copy_id
+    name_slug = (
+        result.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
+        if result.student_name else result.copy_id
+    )
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        if result.pdf_path and result.pdf_path.exists():
+            st.download_button(
+                "Rapport de correction (enseignant)",
+                data=result.pdf_path.read_bytes(),
+                file_name=f"rapport_correction_{name_slug}.pdf",
+                mime="application/pdf",
+                key=f"dl_pdf_{kid}",
+                use_container_width=True,
             )
+    with col_dl2:
+        if result.remediation_pdf_path and result.remediation_pdf_path.exists():
+            st.download_button(
+                "Sujet de remédiation (élève)",
+                data=result.remediation_pdf_path.read_bytes(),
+                file_name=f"sujet_remediation_{name_slug}.pdf",
+                mime="application/pdf",
+                key=f"dl_rem_{kid}",
+                use_container_width=True,
+            )
+        elif not (result.remediation_subject and result.remediation_subject.exercises):
+            st.caption("Sujet de remédiation non disponible (diagnostic insuffisant)")
 
 
 # ── PAGE : À PROPOS ───────────────────────────────────────────────────────────
@@ -446,7 +467,7 @@ if page == "À PROPOS":
         st.markdown(
             "**Hakili Lab** est une plateforme d'évaluation et de remédiation assistée par IA "
             "pour copies manuscrites de **mathématiques**, conçue pour le programme "
-            "du secondaire au Burkina Faso (**3e et Terminale**). "
+            "du secondaire au Burkina Faso (**6e à la Terminale**). "
             "Elle fournit aux enseignants une correction fiable, rapide et pédagogique."
         )
 
@@ -456,9 +477,9 @@ if page == "À PROPOS":
         items = [
             ("Transcription multimodale", "Reconnaissance des textes, formules et schémas manuscrits. Signalement des zones ambiguës."),
             ("Correction intelligente", "Évaluation binaire 0/1 par question et sous-question selon le barème fourni."),
+            ("Barème flexible", "Saisie manuelle, JSON, ou import direct d'un PDF/image du barème — extraction automatique par IA."),
             ("Instructions expert", "Critères contextuels optionnels injectés dans le prompt pour affiner la précision."),
             ("Diagnostic pédagogique", "Analyse des forces et lacunes · Plan de remédiation personnalisé."),
-            ("Confidentialité", "Numérotation anonyme E-001, E-002… Le PDF exporté ne contient jamais le nom de l'élève."),
         ]
         for title, desc in items:
             st.markdown(f"**{title}**")
@@ -498,39 +519,43 @@ if page == "À PROPOS":
 elif page == "TRAITEMENT UNIQUE":
     _page_header("Traitement d'une copie unique", "Analyse · Correction · Rapport")
 
+    if "single_result" not in st.session_state:
+        st.session_state.single_result = None
+
     col_input, col_config = st.columns(2, gap="large")
 
     with col_input:
         st.markdown("#### Fichiers d'entrée")
-        copy_file = st.file_uploader(
+        copy_files = st.file_uploader(
             "Copie de l'élève",
             type=["pdf", "jpg", "jpeg", "png"],
+            accept_multiple_files=True,
             key="single_copy",
-            help="PDF multi-pages ou image",
+            help="1 PDF multi-pages OU plusieurs photos (JPG/PNG) dans l'ordre des pages — jusqu'à 20 images.",
         )
+        if copy_files:
+            n = len(copy_files)
+            if n == 1:
+                st.caption(f"1 fichier chargé — {copy_files[0].name}")
+            else:
+                st.caption(f"{n} photos chargées — vérifiez qu'elles sont dans le bon ordre (page 1, 2…)")
+
         subject_file = st.file_uploader(
             "Énoncé (optionnel)",
             type=["pdf", "jpg", "jpeg", "png"],
             key="single_subject",
             help="PDF ou image de l'énoncé. Laisser vide si non disponible.",
         )
-        rubric_text = st.text_area(
-            "Barème (optionnel)",
-            height=110,
-            placeholder="Q1 : Résoudre le système d'équations\nQ2a : Calculer la limite de f en +∞\nQ2b : Étudier la dérivabilité de f en 0\n\nSi vide : l'IA détecte et note automatiquement chaque question (0/1).",
-            help="Une question par ligne au format 'ID : libellé', ou JSON Rubric. Laisser vide = détection automatique.",
+
+        st.markdown("#### Barème (optionnel)")
+        rubric_file = st.file_uploader(
+            "Importer le barème (PDF ou image)",
+            type=["pdf", "jpg", "jpeg", "png"],
+            key="single_rubric_file",
+            help="Joignez le document barème — l'IA en extraira automatiquement les items.",
         )
 
     with col_config:
-        st.markdown("#### Élève")
-        student_name = st.text_input(
-            "Nom de l'élève",
-            placeholder="Ex : Aminata Sawadogo",
-            help="Sera anonymisé avant traitement",
-        )
-        class_name = st.text_input("Classe / Groupe", placeholder="Ex : 3e A")
-        exam_date = st.date_input("Date de l'examen")
-
         st.markdown("#### Instructions expert")
         expert_instructions = st.text_area(
             "Critères d'interprétation spécifiques (optionnel)",
@@ -545,43 +570,64 @@ elif page == "TRAITEMENT UNIQUE":
     st.divider()
 
     if st.button("Lancer l'analyse", use_container_width=False):
-        if not copy_file:
-            st.error("Veuillez charger la copie de l'élève.")
-        elif not student_name:
-            st.error("Veuillez entrer le nom de l'élève.")
+        if not copy_files:
+            st.error("Veuillez charger la copie de l'élève (PDF ou photo(s)).")
+        elif len(copy_files) > 1 and any(f.name.lower().endswith(".pdf") for f in copy_files):
+            st.error("Impossible de mélanger un PDF avec des images. Chargez soit 1 PDF, soit plusieurs images.")
         else:
+            st.session_state.single_result = None
             with st.spinner("Pipeline en cours…"):
                 try:
-                    from src.core.anonymizer import Anonymizer
+                    from src.core.anonymizer import make_copy_id
                     from src.core.config import settings
                     from src.pipeline.pipeline import run_single_copy
 
                     runs_dir = Path(settings.runs_dir)
-                    anon = Anonymizer(runs_dir / "sessions")
-                    copy_id = anon.register(student_name)
-                    rubric = _parse_rubric_text(rubric_text)
+                    student_name = (
+                        Path(copy_files[0].name).stem.replace("_", " ").replace("-", " ").title()
+                    )
+                    copy_id = make_copy_id(student_name)
+
+                    rubric = _parse_rubric_text("")
 
                     with tempfile.TemporaryDirectory() as tmp:
-                        tmp_path = Path(tmp) / copy_file.name
-                        _save_upload(copy_file, tmp_path)
+                        saved_paths: list[Path] = []
+                        for uf in copy_files:
+                            p = Path(tmp) / uf.name
+                            _save_upload(uf, p)
+                            saved_paths.append(p)
+
                         subject_file_path = None
                         if subject_file:
                             subject_tmp = Path(tmp) / f"subject_{subject_file.name}"
                             _save_upload(subject_file, subject_tmp)
                             subject_file_path = subject_tmp
+
+                        rubric_file_path = None
+                        if rubric_file:
+                            rubric_tmp = Path(tmp) / f"rubric_{rubric_file.name}"
+                            _save_upload(rubric_file, rubric_tmp)
+                            rubric_file_path = rubric_tmp
+
                         result = run_single_copy(
                             copy_id=copy_id,
-                            file_path=tmp_path,
+                            student_name=student_name,
+                            file_paths=saved_paths,
                             rubric=rubric,
+                            rubric_file_path=rubric_file_path,
                             subject_file_path=subject_file_path,
                             expert_instructions=expert_instructions,
                             runs_dir=runs_dir,
                         )
 
-                    _display_results(result, show_corr_download=True)
+                    st.session_state.single_result = result
 
                 except Exception as e:
                     st.error(f"Erreur inattendue : {e}")
+
+    if st.session_state.single_result is not None:
+        st.divider()
+        _display_results(st.session_state.single_result)
 
 
 # ── PAGE : TRAITEMENT BATCH ───────────────────────────────────────────────────
@@ -589,10 +635,21 @@ elif page == "TRAITEMENT UNIQUE":
 elif page == "TRAITEMENT BATCH":
     _page_header("Traitement batch", "Session multi-élèves · Synthèse de classe")
 
+    if "batch_results" not in st.session_state:
+        st.session_state.batch_results = None
+    if "batch_errors" not in st.session_state:
+        st.session_state.batch_errors = []
+
     col_a, col_b = st.columns(2, gap="large")
     with col_a:
-        exam_name = st.text_input("Nom du devoir / Examen", placeholder="Ex : DS1 — Fonctions numériques  |  Composition T1 — Suites")
-        class_select = st.text_input("Classe / Groupe", placeholder="Ex : 3e A  |  Tle C")
+        exam_name = st.text_input(
+            "Nom du devoir / Examen",
+            placeholder="Ex : DS1 — Fonctions numériques  |  Composition T1 — Suites",
+        )
+        class_select = st.text_input(
+            "Classe / Groupe",
+            placeholder="Ex : 6e A  |  4e B  |  3e A  |  2nde  |  Tle C",
+        )
     with col_b:
         exam_date = st.date_input("Date de l'examen")
         num_students = st.number_input("Nombre d'élèves attendus", min_value=1, max_value=500, value=30)
@@ -608,15 +665,17 @@ elif page == "TRAITEMENT BATCH":
             key="batch_subject",
             help="PDF ou image de l'énoncé commun à toutes les copies.",
         )
-        rubric_text_batch = st.text_area(
-            "Barème (optionnel)",
-            height=96,
-            placeholder="Q1 : …\nQ2a : …\n\nSi vide : détection automatique (0/1).",
+        st.markdown("**Barème (optionnel)**")
+        rubric_file_batch = st.file_uploader(
+            "Importer le barème (PDF ou image)",
+            type=["pdf", "jpg", "jpeg", "png"],
+            key="batch_rubric_file",
+            help="Joignez le document barème — l'IA en extraira les items automatiquement.",
         )
     with col_y:
         expert_instructions_batch = st.text_area(
             "Instructions expert (optionnel)",
-            height=110,
+            height=140,
             placeholder="Critères d'interprétation spécifiques à ce devoir…",
         )
 
@@ -639,13 +698,15 @@ elif page == "TRAITEMENT BATCH":
         elif not exam_name:
             st.error("Veuillez entrer le nom du devoir.")
         else:
-            from src.core.anonymizer import Anonymizer
+            st.session_state.batch_results = None
+            st.session_state.batch_errors = []
+
+            from src.core.anonymizer import make_copy_id
             from src.core.config import settings
             from src.pipeline.pipeline import run_single_copy
 
             runs_dir = Path(settings.runs_dir)
-            anon = Anonymizer(runs_dir / "sessions")
-            rubric = _parse_rubric_text(rubric_text_batch)
+            rubric = _parse_rubric_text("")
             results = []
             errors = []
             total = len(copies_folder)
@@ -658,113 +719,127 @@ elif page == "TRAITEMENT BATCH":
                     _save_upload(subject_file_batch, subject_tmp_batch)
                     subject_file_path_batch = subject_tmp_batch
 
+                rubric_file_path_batch = None
+                if rubric_file_batch:
+                    rubric_tmp_batch = Path(tmp) / f"rubric_{rubric_file_batch.name}"
+                    _save_upload(rubric_file_batch, rubric_tmp_batch)
+                    rubric_file_path_batch = rubric_tmp_batch
+
                 for i, uploaded in enumerate(copies_folder):
                     student_name_raw = (
                         Path(uploaded.name).stem.replace("_", " ").replace("-", " ").title()
                     )
-                    copy_id = anon.register(student_name_raw)
-                    progress.progress((i + 1) / total, text=f"Traitement {copy_id} ({i+1}/{total})…")
+                    copy_id = make_copy_id(student_name_raw, str(i + 1))
+                    progress.progress((i + 1) / total, text=f"Traitement {student_name_raw} ({i+1}/{total})…")
                     tmp_path = Path(tmp) / uploaded.name
                     _save_upload(uploaded, tmp_path)
                     try:
                         result = run_single_copy(
                             copy_id=copy_id,
-                            file_path=tmp_path,
+                            student_name=student_name_raw,
+                            file_paths=[tmp_path],
                             rubric=rubric,
+                            rubric_file_path=rubric_file_path_batch,
                             subject_file_path=subject_file_path_batch,
                             expert_instructions=expert_instructions_batch,
                             runs_dir=runs_dir,
                         )
                         results.append(result)
                     except Exception as e:
-                        errors.append(f"{copy_id} : {e}")
+                        errors.append(f"{student_name_raw} : {e}")
 
             progress.empty()
+            st.session_state.batch_results = results
+            st.session_state.batch_errors = errors
 
-            for err in errors:
-                st.error(err)
+    # ── Affichage persistant des résultats batch ───────────────────────────────
+    if st.session_state.batch_results is not None:
+        results = st.session_state.batch_results
+        errors = st.session_state.batch_errors
 
-            if results:
-                success_results = [r for r in results if r.success]
-                st.success(f"{len(success_results)}/{total} copies traitées avec succès.")
+        for err in errors:
+            st.error(err)
 
-                # ── Synthèse de classe ───────────────────────────────────────
-                st.markdown("#### Synthèse de classe")
-                if success_results:
-                    scores = [
-                        (r.copy_id, r.grade.total_score, r.grade.total_possible)
-                        for r in success_results if r.grade
-                    ]
-                    if scores:
-                        avg_score = sum(s for _, s, _ in scores) / len(scores)
-                        max_possible = scores[0][2]
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Moyenne classe", f"{avg_score:.1f} / {max_possible}")
-                        c2.metric("Copies traitées", len(success_results))
-                        c3.metric("Copies en erreur", len(errors))
+        if results:
+            total = len(results) + len(errors)
+            success_results = [r for r in results if r.success]
+            st.success(f"{len(success_results)}/{total} copies traitées avec succès.")
 
-                        import pandas as pd
-                        df = pd.DataFrame(scores, columns=["Copie", "Note", "Maximum"])
-                        st.dataframe(df, use_container_width=True)
+            # ── Synthèse de classe ───────────────────────────────────────
+            st.markdown("#### Synthèse de classe")
+            if success_results:
+                scores = [
+                    (r.student_name or r.copy_id, r.grade.total_score, r.grade.total_possible)
+                    for r in success_results if r.grade
+                ]
+                if scores:
+                    avg_score = sum(s for _, s, _ in scores) / len(scores)
+                    max_possible = scores[0][2]
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Moyenne classe", f"{avg_score:.1f} / {max_possible}")
+                    c2.metric("Copies traitées", len(success_results))
+                    c3.metric("Copies en erreur", len(errors))
 
-                # ── Résultats individuels ────────────────────────────────────
-                st.markdown("#### Résultats individuels")
-                for r in success_results:
-                    if not r.grade:
-                        continue
-                    avg_conf = (
-                        sum(q.confidence for q in r.grade.questions) / len(r.grade.questions)
-                        if r.grade.questions else 0.0
+                    import pandas as pd
+                    df = pd.DataFrame(scores, columns=["Élève", "Note", "Maximum"])
+                    st.dataframe(df, use_container_width=True)
+
+            # ── Résultats individuels ────────────────────────────────────
+            st.markdown("#### Résultats individuels")
+            for r in success_results:
+                if not r.grade:
+                    continue
+                avg_conf = (
+                    sum(q.confidence for q in r.grade.questions) / len(r.grade.questions)
+                    if r.grade.questions else 0.0
+                )
+                has_review = any(q.requires_review for q in r.grade.questions)
+                flag = "!" if has_review else "✓"
+                display_name = r.student_name or r.copy_id
+                label = (
+                    f"{flag}  {display_name} — "
+                    f"{r.grade.total_score}/{r.grade.total_possible} pt(s)  "
+                    f"· confiance {avg_conf:.0%}"
+                    + ("  · Révision requise" if has_review else "")
+                )
+                with st.expander(label):
+                    for q in r.grade.questions:
+                        q_icon = "✓" if q.score == 1 else "✗"
+                        rtag = " · révision" if q.requires_review else ""
+                        st.markdown(
+                            f"{q_icon} **{q.rubric_item_id}** — {q.score}/1 "
+                            f"(confiance {q.confidence:.0%}){rtag}"
+                        )
+                        st.caption(f"{q.observed_answer} — {q.comment}")
+
+                    if r.diagnostic:
+                        if r.diagnostic.strengths:
+                            st.markdown("**Forces :** " + " · ".join(r.diagnostic.strengths))
+                        if r.diagnostic.weaknesses:
+                            st.markdown("**Lacunes :** " + " · ".join(r.diagnostic.weaknesses))
+
+                    bc1, bc2 = st.columns(2)
+                    r_slug = (
+                        r.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
+                        if r.student_name else r.copy_id
                     )
-                    has_review = any(q.requires_review for q in r.grade.questions)
-                    flag = "!" if has_review else "✓"
-                    label = (
-                        f"{flag}  {r.copy_id} — "
-                        f"{r.grade.total_score}/{r.grade.total_possible} pt(s)  "
-                        f"· confiance {avg_conf:.0%}"
-                        + ("  · Révision requise" if has_review else "")
-                    )
-                    with st.expander(label):
-                        for q in r.grade.questions:
-                            q_icon = "✓" if q.score == 1 else "✗"
-                            rtag = " · révision" if q.requires_review else ""
-                            st.markdown(
-                                f"{q_icon} **{q.rubric_item_id}** — {q.score}/1 "
-                                f"(confiance {q.confidence:.0%}){rtag}"
-                            )
-                            st.caption(f"{q.observed_answer} — {q.comment}")
-
-                        if r.diagnostic:
-                            if r.diagnostic.strengths:
-                                st.markdown("**Forces :** " + " · ".join(r.diagnostic.strengths))
-                            if r.diagnostic.weaknesses:
-                                st.markdown("**Lacunes :** " + " · ".join(r.diagnostic.weaknesses))
-
-                        dcol1, dcol2 = st.columns(2)
+                    with bc1:
                         if r.pdf_path and r.pdf_path.exists():
-                            dcol1.download_button(
-                                "📄 Rapport PDF",
+                            st.download_button(
+                                "Rapport correction",
                                 data=r.pdf_path.read_bytes(),
-                                file_name=f"rapport_{r.copy_id}.pdf",
+                                file_name=f"rapport_correction_{r_slug}.pdf",
                                 mime="application/pdf",
-                                key=f"pdf_{r.copy_id}",
+                                key=f"batch_pdf_{r.copy_id}",
+                                use_container_width=True,
                             )
-                        if r.json_path and r.json_path.exists():
-                            dcol2.download_button(
-                                "📦 Export JSON",
-                                data=r.json_path.read_text(encoding="utf-8"),
-                                file_name=f"result_{r.copy_id}.json",
-                                mime="application/json",
-                                key=f"json_{r.copy_id}",
+                    with bc2:
+                        if r.remediation_pdf_path and r.remediation_pdf_path.exists():
+                            st.download_button(
+                                "Sujet remédiation",
+                                data=r.remediation_pdf_path.read_bytes(),
+                                file_name=f"sujet_remediation_{r_slug}.pdf",
+                                mime="application/pdf",
+                                key=f"batch_rem_{r.copy_id}",
+                                use_container_width=True,
                             )
-
-                # ── Fiche de correspondance ──────────────────────────────────
-                corr_path = runs_dir / "sessions" / "correspondence.csv"
-                if corr_path.exists():
-                    st.divider()
-                    st.download_button(
-                        "🔒 Télécharger la fiche de correspondance (CSV)",
-                        data=corr_path.read_text(encoding="utf-8"),
-                        file_name="correspondance.csv",
-                        mime="text/csv",
-                    )

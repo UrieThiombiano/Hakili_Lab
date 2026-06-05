@@ -1,58 +1,21 @@
-import csv
-from pathlib import Path
+"""
+Utilitaire de génération d'identifiants sûrs pour le système de fichiers.
+L'anonymisation (E-001) a été supprimée — les copies sont identifiées par le nom réel de l'élève.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
 
 
-class Anonymizer:
+def make_copy_id(name: str, suffix: str = "") -> str:
     """
-    Attribue des identifiants anonymes (E-001, E-002…) aux élèves
-    et persiste la fiche de correspondance dans un CSV séparé.
+    Génère un identifiant sûr pour le système de fichiers à partir d'un nom d'élève.
+    Ex : "Aminata Sawadogo" → "aminata_sawadogo"
+         "Aminata Sawadogo", suffix="2" → "aminata_sawadogo_2"
     """
-
-    def __init__(self, session_dir: Path) -> None:
-        self.session_dir = session_dir
-        self.session_dir.mkdir(parents=True, exist_ok=True)
-        self._mapping: dict[str, str] = {}  # nom → copy_id
-        self._correspondence_path = session_dir / "correspondence.csv"
-        self._load()
-
-    def register(self, name: str) -> str:
-        """Enregistre un élève et retourne son identifiant anonyme."""
-        name = name.strip()
-        if name in self._mapping:
-            return self._mapping[name]
-        copy_id = f"E-{len(self._mapping) + 1:03d}"
-        self._mapping[name] = copy_id
-        self._save()
-        return copy_id
-
-    def register_batch(self, names: list[str]) -> dict[str, str]:
-        """Enregistre une liste d'élèves et retourne le mapping complet."""
-        for name in names:
-            self.register(name)
-        return dict(self._mapping)
-
-    def get_id(self, name: str) -> str | None:
-        return self._mapping.get(name.strip())
-
-    @property
-    def correspondence_path(self) -> Path:
-        return self._correspondence_path
-
-    @property
-    def mapping(self) -> dict[str, str]:
-        return dict(self._mapping)
-
-    def _load(self) -> None:
-        if not self._correspondence_path.exists():
-            return
-        with open(self._correspondence_path, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                self._mapping[row["nom"]] = row["id_anonyme"]
-
-    def _save(self) -> None:
-        with open(self._correspondence_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["nom", "id_anonyme"])
-            for name, copy_id in self._mapping.items():
-                writer.writerow([name, copy_id])
+    normalized = unicodedata.normalize("NFD", name.strip())
+    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "_", ascii_name.lower()).strip("_")
+    base = slug or "copie"
+    return f"{base}_{suffix}" if suffix else base

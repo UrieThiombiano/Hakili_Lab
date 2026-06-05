@@ -1,5 +1,5 @@
 # Registre des Décisions — Hakili Lab AI Correction
-**Mis à jour le : 2026-05-08**
+**Mis à jour le : 2026-06-05**
 
 ---
 
@@ -17,8 +17,8 @@
 
 ## Décisions CEO — 2026-05-08
 
-### D-CEO-01 — Périmètre matières du MVP
-**Décision :** Mathématiques uniquement.
+### D-CEO-01 — Périmètre matières et niveaux du MVP
+**Décision :** Mathématiques uniquement, tous niveaux du secondaire : **6e à la Terminale**.
 
 ---
 
@@ -33,12 +33,27 @@
 
 ---
 
-### D-CEO-03 — Fournisseur IA
-**Décision :** **Anthropic Claude** exclusivement pour le prototype et la production.
+### D-CEO-03 — Stratégie fournisseurs IA *(révisée 2026-06-05)*
+**Décision initiale (2026-05-08) :** Anthropic Claude exclusivement.
+**Décision révisée (2026-06-05) :** **Architecture multi-provider avec routing automatique par tâche.**
 
-**Justification :** Meilleures performances sur les tâches de raisonnement mathématique. L'abstraction multi-fournisseur (D004 initiale) est simplifiée : Claude reste le fournisseur unique, aucun switch de provider prévu.
+**Contexte de révision :** Un run réel sur une copie de 15-20 pages a coûté ~$8 avec Claude Opus 4.7 exclusif. L'analyse comparative a montré que chaque tâche a un provider optimal différent.
 
-**Modèle cible :** `claude-opus-4-7` pour la correction (raisonnement), `claude-haiku-4-5-20251001` pour les tâches légères (contrôle qualité, résumé).
+**Répartition finale :**
+
+| Tâche | Provider | Modèle | Justification clé |
+|---|---|---|---|
+| Transcription | Google Gemini | gemini-2.0-flash | Vision native, tier gratuit 1M tok/j |
+| Correction | DeepSeek | deepseek-chat (V3) | MATH-500 ~90%, 18× moins cher qu'Opus |
+| Diagnostic | DeepSeek | deepseek-reasoner (R1) | Modèle de raisonnement, causes cachées |
+| Remédiation | Mistral | mistral-small-latest | Français académique natif |
+| Extraction structurée | Claude | claude-sonnet-4-6 | tool_use forcé, fiabilité JSON |
+
+**Routing :** automatique selon clés API disponibles dans `.env` — fallback Claude si clé absente.
+
+**Analyse complète :** [docs/ai_providers_analysis.md](ai_providers_analysis.md)
+
+**Coût résultant :** ~$0.02/copie vs ~$8.00/copie initial — réduction ×400.
 
 ---
 
@@ -78,17 +93,16 @@
 
 ---
 
-### D-CEO-07 — Politique d'anonymisation
-**Décision :** Système de **numérotation anonyme** avec fiche de correspondance séparée.
+### D-CEO-07 — Politique d'identification *(anonymisation supprimée)*
+**Décision :** **Suppression de l'anonymisation.** Les copies sont identifiées par le nom réel de l'élève.
 
 **Processus :**
-1. L'enseignant saisit le nom de chaque élève avant traitement.
-2. Le système attribue automatiquement un numéro anonyme (ex. `E-001`, `E-002`).
-3. La fiche de correspondance `nom ↔ numéro` est stockée localement, séparément des copies traitées.
-4. Tous les artefacts (JSON, PDF) ne contiennent que le numéro.
-5. L'enseignant peut télécharger la fiche de correspondance en fin de session.
+1. L'enseignant saisit le nom de l'élève (copie unique) ou le fichier est nommé avec le nom de l'élève (batch).
+2. Un identifiant technique sûr (slug, ex. `aminata_sawadogo`) est dérivé du nom pour les dossiers et fichiers.
+3. Le PDF exporté affiche le nom réel de l'élève.
+4. Aucune fiche de correspondance n'est générée.
 
-**Le PDF exporté ne contient jamais le nom de l'élève.**
+**Justification :** La correction est un acte pédagogique interne — l'anonymisation compliquait le flux sans apporter de valeur dans le contexte d'utilisation réel.
 
 ---
 
@@ -109,21 +123,64 @@ Les deux modes partagent le même pipeline. Le mode Batch ajoute une boucle d'it
 
 ---
 
+### D-CEO-10 — Format d'entrée optimal *(nouveau 2026-06-05)*
+**Décision :** **PDF multi-pages scanné à 150 DPI, mode niveaux de gris.**
+
+> **DPI** (*Dots Per Inch*) : nombre de pixels capturés par pouce (2,54 cm) de document physique. Un scan A4 à 150 DPI produit une image de 1 240 × 1 754 pixels, suffisant pour lire exposants et barres de fraction. À 300 DPI, l'image est 4× plus lourde sans gain de qualité pour un LLM.
+
+**Justification :**
+- 150 DPI satisfait le critère de Nyquist pour les traits manuscrits (≥ 2× la fréquence des éléments les plus fins)
+- Scanner = distorsion perspective nulle (θ = 0°) vs photo téléphone (θ = 20-35° → 13% compression)
+- Niveaux de gris : conserve les demi-tons (traits pâles) contrairement au N&B pur
+- 300 DPI = overkill : +80% de tokens sans gain perceptible pour un LLM
+
+**Matériel recommandé :**
+- Usage régulier : Scanner ADF (ex. Epson WorkForce ES-65W, ~$130)
+- Terrain : Smartphone + Microsoft Lens (mode Document → correction perspective automatique)
+
+**Analyse complète :** [docs/input_pipeline_analysis.md](input_pipeline_analysis.md)
+
+---
+
+### D-CEO-11 — Coût cible et volume de référence *(nouveau 2026-06-05)*
+**Décision :** Coût cible en production validé : **~$0.02/copie (avec Gemini), ~$12/an pour 540 copies.**
+
+**Hypothèse de référence :**
+- Volume : 3 classes × 6 évaluations × 30 élèves = 540 copies/an
+- Pages/copie : ~11 pages (constaté sur copie réelle, 150 DPI)
+- Total pages : ~5 940 pages/an → 33 pages/jour scolaire (Gemini tier gratuit : 1M tok/j)
+
+**Coût réel mesuré par scénario (11 pages, 150 DPI) :**
+
+| Scénario | Transcription | Correction | Diagnostic | Remédiation | **Total/copie** | **Total 100 copies** |
+|---|---|---|---|---|---|---|
+| Optimal (Gemini actif) | Gemini Flash ~$0.008 | DeepSeek V3 | DeepSeek R1 | Mistral | **~$0.028** | ~$2.80 |
+| Actuel (Gemini KO, région) | Sonnet 4.6 ~$0.27 | DeepSeek V3 | DeepSeek R1 | Mistral | **~$0.29** | ~$29 |
+| Fallback total (Claude seul) | Sonnet 4.6 ~$0.27 | Sonnet 4.6 | Haiku 4.5 | Sonnet 4.6 | **~$0.48** | ~$48 |
+
+**Poste dominant : la transcription (vision).** Elle représente 93% du coût actuel parce que Claude Sonnet traite les images à $3/M tokens vs $0.10/M pour Gemini Flash. Réactiver Gemini réduirait le coût par 10.
+
+**Seuil d'alerte :** si le volume dépasse 200 copies/jour avec Gemini actif, passer au tier payant (~$2/an supplémentaires).
+
+---
+
 ## Tableau de synthèse
 
-| ID | Sujet | Décision finale |
-|---|---|---|
-| D001 | Flux d'ingestion | Copie complète (pas exercice par exercice) |
-| D002 | Source de vérité | JSON → PDF |
-| D003 | Interface | Streamlit |
-| D004 | Stockage | Local + anonymisé |
-| D005 | Volume cible | 100 copies réelles |
-| D-CEO-01 | Matières | Mathématiques uniquement |
-| D-CEO-02 | Format barème | Binaire 0/1 par question et sous-question |
-| D-CEO-03 | Fournisseur IA | Anthropic Claude (exclusif) |
-| D-CEO-04 | Tolérance / instructions expert | Couche optionnelle d'instructions expert |
-| D-CEO-05 | Validation humaine | Supprimée du pipeline (hors plateforme) |
-| D-CEO-06 | Rapport PDF | 7 éléments + affichage plateforme + téléchargement |
-| D-CEO-07 | Confidentialité | Numérotation anonyme + fiche de correspondance |
-| D-CEO-08 | Remédiation | Générique (librairie Hakili reportée) |
-| D-CEO-09 | Modes interface | Copie Unique + Batch |
+| ID | Sujet | Décision finale | Date |
+|---|---|---|---|
+| D001 | Flux d'ingestion | Copie complète (pas exercice par exercice) | 2026-05-08 |
+| D002 | Source de vérité | JSON → PDF | 2026-05-08 |
+| D003 | Interface | Streamlit | 2026-05-08 |
+| D004 | Stockage | Local pour prototype | 2026-05-08 |
+| D005 | Volume cible | 100 copies réelles | 2026-05-08 |
+| D-CEO-01 | Matières et niveaux | Mathématiques, **6e à la Terminale** | 2026-05-08 |
+| D-CEO-02 | Format barème | Binaire 0/1 par question et sous-question | 2026-05-08 |
+| D-CEO-03 | Stratégie IA | **Multi-provider** (Gemini + DeepSeek + Mistral + Claude) | **2026-06-05** |
+| D-CEO-04 | Instructions expert | Couche optionnelle d'instructions contextuelles | 2026-05-08 |
+| D-CEO-05 | Validation humaine | Hors plateforme (enseignant sur PDF exporté) | 2026-05-08 |
+| D-CEO-06 | Rapport PDF | Note · commentaires · diagnostic · remédiation · confiance | 2026-05-08 |
+| D-CEO-07 | Identification | Nom réel de l'élève (slug technique pour fichiers) | 2026-05-08 |
+| D-CEO-08 | Remédiation | Sujet d'exercices personnalisé (5 exos/lacune) | 2026-05-08 |
+| D-CEO-09 | Modes interface | Copie Unique + Batch | 2026-05-08 |
+| D-CEO-10 | Format entrée | **PDF scanner 150 DPI, niveaux de gris** | **2026-06-05** |
+| D-CEO-11 | Coût cible | **~$0.02/copie · ~$12/an** pour 540 copies | **2026-06-05** |

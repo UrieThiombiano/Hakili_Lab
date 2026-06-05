@@ -3,7 +3,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-# ── Qualité image ──────────────────────────────────────────────────────────────
+# ── Qualité image ─────────────────────────────────────────────────────────────
 
 class PageQualityReport(BaseModel):
     page_number: int
@@ -73,12 +73,19 @@ class CopyGrade(BaseModel):
     expert_instructions_used: bool = False
 
 
-# ── Diagnostic et remédiation ──────────────────────────────────────────────────
+# ── Diagnostic et remédiation ─────────────────────────────────────────────────
 
 class SkillAssessment(BaseModel):
     name: str
     level: Literal["mastered", "partial", "weak", "unknown"]
     evidence: str
+
+
+class RootCauseError(BaseModel):
+    """Erreur cachée derrière une erreur visible — cœur du diagnostic pédagogique."""
+    visible_error: str
+    hidden_cause: str
+    linked_questions: list[str] = Field(default_factory=list)
 
 
 class RemediationItem(BaseModel):
@@ -91,8 +98,23 @@ class DiagnosticResult(BaseModel):
     copy_id: str
     strengths: list[str]
     weaknesses: list[str]
+    root_causes: list[RootCauseError] = Field(default_factory=list)
     skills: list[SkillAssessment]
     remediation_plan: list[RemediationItem]
+
+
+# ── Sujet de remédiation ───────────────────────────────────────────────────────
+
+class Exercise(BaseModel):
+    number: int
+    topic: str
+    question: str
+    hint: str = ""
+
+
+class RemediationSubject(BaseModel):
+    copy_id: str
+    exercises: list[Exercise]
 
 
 # ── Ingestion ────────────────────────────────────────────────────────────────

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"from src.api.claude_client import ClaudeClient; print\\('OK'\\)\")",
+      "Bash(python -c \"from src.models.domain import DiagnosticResult, RootCauseError, RemediationSubject, Exercise; print\\('domain OK'\\)\")",
+      "Bash(python -c \"from src.core.anonymizer import make_copy_id; print\\('anonymizer OK:', make_copy_id\\('Aminata Sawadogo'\\)\\)\")",
+      "Bash(python -c \"from src.pipeline.pdf_report import generate_copy_report; print\\('pdf_report OK'\\)\")",
+      "Bash(python -c \"from src.pipeline.pipeline import run_single_copy, PipelineResult; print\\('pipeline OK'\\)\")",
+      "Bash(python -m py_compile src/models/domain.py src/core/anonymizer.py)",
+      "Bash(python -m py_compile src/pipeline/pipeline.py src/ui/app.py src/api/claude_client.py src/pipeline/pdf_report.py)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(pip show *)",
+      "Bash(python -m py_compile src/api/deepseek_client.py src/api/mistral_client.py src/pipeline/pipeline.py src/core/config.py)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -c \"import google.generativeai; import openai; import mistralai; print\\('OK'\\)\")"
+    ]
+  }
+}
