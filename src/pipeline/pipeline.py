@@ -1,18 +1,21 @@
 """
-Orchestrateur principal du pipeline Hakili Lab.
+Pipeline principal — Hakili Lab.
 
-Flux : ingestion → qualité → transcription → correction → diagnostic → remédiation → PDF + JSON
+Flux : ingestion → qualité → transcription → [orchestrateur] → correction
+     → [orchestrateur] → diagnostic → [orchestrateur] → remédiation
+     → [orchestrateur] → export PDF + JSON
 
 Routage multi-providers (auto selon clés .env) :
   Transcription  → Gemini 2.0 Flash (si GOOGLE_API_KEY)  sinon Claude Sonnet
   Correction     → DeepSeek V3      (si DEEPSEEK_API_KEY) sinon Claude Sonnet
-  Diagnostic     → DeepSeek R1      (si DEEPSEEK_API_KEY) sinon Claude Haiku
+  Diagnostic     → DeepSeek R1      (si DEEPSEEK_API_KEY) sinon Claude Sonnet
   Remédiation    → Mistral Small    (si MISTRAL_API_KEY)  sinon Claude Sonnet
 """
 from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,15 +26,154 @@ from src.models.domain import (
     DiagnosticResult,
     IngestionResult,
     QualityReport,
+    QuestionGrade,
     Rubric,
     RemediationSubject,
     TranscriptionResult,
 )
 from src.pipeline.image_quality import assess_copy_quality
 from src.pipeline.ingestion import ingest_images, ingest_pdf
+from src.pipeline.orchestrator import (
+    ValidationIssue,
+    validate_diagnostic,
+    validate_grading,
+    validate_remediation,
+    validate_transcription,
+)
 from src.pipeline.pdf_report import generate_copy_report, generate_remediation_pdf
 
 logger = logging.getLogger(__name__)
+
+
+# ── Ensemble voting pour le grading ──────────────────────────────────────────
+#
+# Principe : lancer la correction N fois avec temperature > 0 pour obtenir des
+# échantillons diversifiés, puis fusionner par vote majoritaire question par
+# question. Les questions en désaccord sont automatiquement flaggées
+# requires_review=True — c'est le signal d'incertitude réelle, pas du bruit.
+
+_ENSEMBLE_RUNS: int = 3
+_ENSEMBLE_TEMPERATURE: float = 0.4   # diversité suffisante sans dégradation de qualité
+
+
+def _grade_ensemble(
+    grading_client,
+    fallback_client: ClaudeClient,
+    *,
+    copy_id: str,
+    transcription: TranscriptionResult,
+    rubric: Rubric,
+    subject_text: str,
+    expert_instructions: str,
+) -> CopyGrade | None:
+    """
+    Lance le grading _ENSEMBLE_RUNS fois, fusionne par vote majoritaire.
+
+    - Score final d'une question = score obtenu par la majorité des runs.
+    - requires_review=True si au moins 1 run est en désaccord avec la majorité.
+    - confidence réduite à ≤ 0.6 en cas de désaccord.
+    """
+    grades: list[CopyGrade] = []
+
+    for run_idx in range(_ENSEMBLE_RUNS):
+        resp = grading_client.grade(
+            transcription=transcription,
+            rubric=rubric,
+            subject_text=subject_text,
+            expert_instructions=expert_instructions,
+            temperature=_ENSEMBLE_TEMPERATURE,
+        )
+        if not resp.success or resp.data is None:
+            if type(grading_client).__name__ != "ClaudeClient":
+                resp = fallback_client.grade(
+                    transcription=transcription,
+                    rubric=rubric,
+                    subject_text=subject_text,
+                    expert_instructions=expert_instructions,
+                    temperature=_ENSEMBLE_TEMPERATURE,
+                )
+        if resp.success and resp.data is not None:
+            resp.data.copy_id = copy_id
+            grades.append(resp.data)
+            logger.info("[%s] Run ensemble %d/%d → %d questions", copy_id, run_idx + 1, _ENSEMBLE_RUNS, len(resp.data.questions))
+
+    if not grades:
+        return None
+
+    if len(grades) == 1:
+        logger.warning("[%s] Ensemble : un seul run réussi — résultat non consolidé.", copy_id)
+        return grades[0]
+
+    # ── Fusion par vote majoritaire ────────────────────────────────────────────
+    # Collecte tous les identifiants de questions vus dans l'ensemble des runs
+    ordered_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for g in grades:
+        for q in g.questions:
+            if q.rubric_item_id not in seen_ids:
+                ordered_ids.append(q.rubric_item_id)
+                seen_ids.add(q.rubric_item_id)
+
+    merged_questions: list[QuestionGrade] = []
+    disagreements: list[str] = []
+
+    for qid in ordered_ids:
+        # Collecte les réponses de chaque run pour cette question
+        run_answers: list[tuple[int, float, str, str]] = []  # score, conf, comment, observed
+        for g in grades:
+            for q in g.questions:
+                if q.rubric_item_id == qid:
+                    run_answers.append((q.score, q.confidence, q.comment, q.observed_answer))
+                    break
+
+        if not run_answers:
+            continue
+
+        scores = [a[0] for a in run_answers]
+        score_counts = Counter(scores)
+        majority_score = score_counts.most_common(1)[0][0]
+        agreement = score_counts[majority_score] / len(scores)
+        is_disagreement = agreement < 1.0
+
+        if is_disagreement:
+            disagreements.append(qid)
+
+        # Prend le commentaire/réponse d'un run qui a voté pour le score majoritaire
+        majority_answer = next(
+            (a for a in run_answers if a[0] == majority_score), run_answers[0]
+        )
+        avg_confidence = sum(a[1] for a in run_answers) / len(run_answers)
+        final_confidence = min(avg_confidence, 0.6) if is_disagreement else avg_confidence
+
+        merged_questions.append(QuestionGrade(
+            rubric_item_id=qid,
+            score=majority_score,
+            confidence=final_confidence,
+            comment=majority_answer[2],
+            observed_answer=majority_answer[3],
+            requires_review=is_disagreement,
+        ))
+
+    total_score = sum(q.score for q in merged_questions)
+    total_possible = len(merged_questions)
+
+    if disagreements:
+        logger.warning(
+            "[%s] Ensemble — %d question(s) en désaccord (flaggées requires_review) : %s",
+            copy_id, len(disagreements), ", ".join(disagreements),
+        )
+
+    logger.warning(
+        "[%s] Ensemble fusionné — %d/%d pts | %d questions | %d désaccords",
+        copy_id, total_score, total_possible, len(merged_questions), len(disagreements),
+    )
+
+    return CopyGrade(
+        copy_id=copy_id,
+        total_score=total_score,
+        total_possible=total_possible,
+        questions=merged_questions,
+    )
 
 
 # ── Factories de clients (import lazy pour éviter les erreurs au démarrage) ───
@@ -84,6 +226,8 @@ class PipelineResult:
     remediation_pdf_path: Path | None = None
     json_path: Path | None = None
     errors: list[str] = field(default_factory=list)
+    # Problèmes détectés par l'orchestrateur, affichés dans l'interface enseignant
+    validation_issues: list[ValidationIssue] = field(default_factory=list)
 
     @property
     def success(self) -> bool:
@@ -189,35 +333,53 @@ def run_single_copy(
     if not transcription_resp.success or transcription_resp.data is None:
         result.errors.append(f"Transcription échouée : {transcription_resp.error}")
         return result
-    result.transcription = transcription_resp.data
 
-    # 4. Correction ─────────────────────────────────────────────────────────────
-    logger.info("[%s] Correction (%s)…", copy_id, type(grading_client).__name__)
-    grade_resp = grading_client.grade(
+    # ── Orchestrateur ① : validation transcription ────────────────────────────
+    vt = validate_transcription(transcription_resp.data)
+    result.validation_issues.extend(vt.issues)
+    if not vt.valid:
+        result.errors.append(f"Transcription invalide : {vt.summary}")
+        return result
+    result.transcription = vt.data
+
+    # 4. Extraction des questions si pas de barème → barème virtuel stable
+    #    (temperature=0 : lecture factuelle, une seule fois)
+    if not rubric.items:
+        logger.info("[%s] Aucun barème fourni — extraction des questions depuis la transcription…", copy_id)
+        rubric = claude_client.extract_questions_from_transcription(result.transcription)
+        if not rubric.items:
+            logger.warning(
+                "[%s] Extraction échouée — la correction s'appuiera sur l'auto-détection.",
+                copy_id,
+            )
+
+    # 5. Correction par ensemble voting ────────────────────────────────────────
+    #    Chaque run utilise temperature=0.4 pour la diversité ; la fusion par
+    #    vote majoritaire donne un résultat plus robuste qu'un seul run.
+    logger.info("[%s] Correction ensemble (%d runs, %s)…", copy_id, _ENSEMBLE_RUNS, type(grading_client).__name__)
+    merged_grade = _grade_ensemble(
+        grading_client,
+        claude_client,
+        copy_id=copy_id,
         transcription=result.transcription,
         rubric=rubric,
         subject_text=subject_text,
         expert_instructions=expert_instructions,
     )
-    if not grade_resp.success or grade_resp.data is None:
-        if type(grading_client).__name__ != "ClaudeClient":
-            logger.warning(
-                "[%s] %s échoué — fallback correction → %s",
-                copy_id, type(grading_client).__name__, settings.claude_model_heavy,
-            )
-            grade_resp = claude_client.grade(
-                transcription=result.transcription,
-                rubric=rubric,
-                subject_text=subject_text,
-                expert_instructions=expert_instructions,
-            )
-    if not grade_resp.success or grade_resp.data is None:
-        result.errors.append(f"Correction échouée : {grade_resp.error}")
+    if merged_grade is None:
+        result.errors.append("Correction échouée : tous les runs ont échoué.")
         return result
-    result.grade = grade_resp.data
-    result.grade.copy_id = copy_id
 
-    # 5. Diagnostic ─────────────────────────────────────────────────────────────
+    # ── Orchestrateur ② : validation correction ───────────────────────────────
+    rubric_provided = bool(rubric.items)
+    vg = validate_grading(merged_grade, rubric_provided=rubric_provided)
+    result.validation_issues.extend(vg.issues)
+    if not vg.valid:
+        result.errors.append(f"Correction invalide : {vg.summary}")
+        return result
+    result.grade = vg.data
+
+    # 6. Diagnostic ─────────────────────────────────────────────────────────────
     logger.info("[%s] Diagnostic (%s)…", copy_id, type(diagnostic_client).__name__)
     diag_resp = diagnostic_client.diagnose(result.grade)
     if not diag_resp.success or diag_resp.data is None:
@@ -228,11 +390,14 @@ def run_single_copy(
             )
             diag_resp = claude_client.diagnose(result.grade)
     if diag_resp.success and diag_resp.data is not None:
-        result.diagnostic = diag_resp.data
+        # ── Orchestrateur ③ : validation diagnostic ───────────────────────────
+        vd = validate_diagnostic(diag_resp.data, result.grade)
+        result.validation_issues.extend(vd.issues)
+        result.diagnostic = vd.data
     else:
         logger.warning("[%s] Diagnostic échoué (non bloquant) : %s", copy_id, diag_resp.error)
 
-    # 5b. Sujet de remédiation ─────────────────────────────────────────────────
+    # 7. Sujet de remédiation ─────────────────────────────────────────────────
     if result.diagnostic is not None:
         logger.info("[%s] Génération du sujet de remédiation (%s)…",
                     copy_id, type(remediation_client).__name__)
@@ -245,13 +410,16 @@ def run_single_copy(
                 )
                 rem_resp = claude_client.generate_remediation_subject(result.diagnostic)
         if rem_resp.success and rem_resp.data is not None:
-            result.remediation_subject = rem_resp.data
+            # ── Orchestrateur ④ : validation remédiation ─────────────────────
+            vr = validate_remediation(rem_resp.data, result.diagnostic)
+            result.validation_issues.extend(vr.issues)
+            result.remediation_subject = vr.data
             logger.info("[%s] %d exercices générés.", copy_id, len(result.remediation_subject.exercises))
         else:
             logger.warning("[%s] Sujet de remédiation non généré (non bloquant) : %s",
                            copy_id, rem_resp.error)
 
-    # 6. Export JSON ────────────────────────────────────────────────────────────
+    # 8. Export JSON ────────────────────────────────────────────────────────────
     json_dir = out / copy_id
     json_dir.mkdir(parents=True, exist_ok=True)
     json_path = json_dir / "result.json"
@@ -267,7 +435,7 @@ def run_single_copy(
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     result.json_path = json_path
 
-    # 7. Rapport PDF correction ────────────────────────────────────────────────
+    # 9. Rapport PDF correction ────────────────────────────────────────────────
     logger.info("[%s] Génération PDF rapport correction…", copy_id)
     pdf_path = json_dir / "rapport_correction.pdf"
     generate_copy_report(
@@ -280,7 +448,7 @@ def run_single_copy(
     )
     result.pdf_path = pdf_path
 
-    # 8. PDF sujet de remédiation (document élève) ────────────────────────────
+    # 10. PDF sujet de remédiation (document élève) ────────────────────────────
     if result.remediation_subject and result.remediation_subject.exercises:
         logger.info("[%s] Génération PDF sujet de remédiation…", copy_id)
         remediation_pdf_path = json_dir / "sujet_remediation.pdf"

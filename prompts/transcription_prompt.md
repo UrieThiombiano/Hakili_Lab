@@ -26,7 +26,7 @@ Selon le niveau scolaire déduit du contenu, les notations courantes sont :
 Transcris les formules telles qu'elles sont écrites par l'élève, même si elles contiennent des erreurs de signe, de symbole ou de notation.
 
 ## Format de sortie
-Appelle l'outil `save_transcription` avec les données extraites.
+Produis la transcription structurée selon le format requis par le système appelant.
 
 ## Contraintes de valeurs
 - `global_quality` : `"good"` | `"medium"` | `"poor"`

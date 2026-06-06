@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     # Anthropic Claude
     anthropic_api_key: str
     claude_model_heavy: str = "claude-sonnet-4-6"   # Sonnet 4.6 : 1.7× moins cher qu'Opus
-    claude_model_light: str = "claude-haiku-4-5-20251001"
+    claude_model_light: str = "claude-sonnet-4-6"
 
     # Google Gemini (vision — gratuit jusqu'à 1 M tokens/jour)
     google_api_key: str = ""

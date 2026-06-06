@@ -1,0 +1,634 @@
+"""
+Orchestrateur de validation — Hakili Lab
+=========================================
+
+Valide et corrige automatiquement les sorties de chaque étape du pipeline
+avant de les transmettre à l'étape suivante.
+
+Principes :
+  - Aucun appel LLM : 100 % Python, exécution < 1 ms, coût $0.
+  - Deux niveaux de problème :
+      • "warning"  → problème détecté ET corrigé automatiquement (pipeline continue)
+      • "error"    → problème bloquant, pipeline arrêté, message clair à l'enseignant
+  - Chaque validateur retourne un ValidationResult[T] avec la donnée
+    (éventuellement corrigée) et la liste des problèmes détectés.
+
+Intégration dans le pipeline :
+  TRANSCRIPTION → validate_transcription() →
+  CORRECTION    → validate_grading()       →
+  DIAGNOSTIC    → validate_diagnostic()    →
+  REMÉDIATION   → validate_remediation()
+
+Codes d'anomalie (utilisés dans les logs et dans l'UI) :
+  NO_PAGES                   Transcription sans aucune page
+  ALL_PAGES_EMPTY            Toutes les pages sont vides ou [ILLISIBLE]
+  LOW_CONFIDENCE             Confiance moyenne de transcription trop faible
+  HIGH_ILLISIBLE_RATIO       Trop de zones illisibles dans la transcription
+  NO_QUESTIONS               Correction sans aucune question évaluée
+  SCORE_SUM_MISMATCH         total_score ≠ somme des scores individuels → auto-fixé
+  POSSIBLE_COUNT_MISMATCH    total_possible ≠ nombre de questions → auto-fixé
+  LOW_CONF_REVIEW_FORCED     requires_review forcé sur confiance < 60 % → auto-fixé
+  DUPLICATE_QUESTION_IDS     Identifiants de questions en doublon
+  SUSPICIOUS_ALL_ZERO        Tous les scores à 0 sans barème fourni
+  SUSPICIOUS_ALL_ONE         Tous les scores à 1 sans barème fourni
+  SUSPICIOUS_HIGH_ZERO_RATIO ≥ 95 % de scores à 0 sans barème
+  SUSPICIOUS_HIGH_ONE_RATIO  ≥ 95 % de scores à 1 sans barème
+  STRENGTH_ON_ZERO_SCORE     Force mentionnant une question à score=0 → auto-fixé
+  WEAKNESS_ON_ONE_SCORE      Lacune mentionnant une question à score=1 → auto-fixé
+  ROOT_CAUSE_INVALID_LINKS   Cause cachée liée à des questions inexistantes → auto-fixé
+  EMPTY_REMEDIATION_PLAN     Lacunes présentes mais plan de remédiation vide
+  EMPTY_DIAGNOSTIC           Diagnostic sans forces ni lacunes
+  NO_EXERCISES               Sujet de remédiation vide
+  SERIES_COUNT_MISMATCH      Nombre de séries ≠ nombre de lacunes
+  EMPTY_EXERCISE_QUESTIONS   Exercices sans énoncé
+  EXERCISE_RENUMBERED        Numérotation non séquentielle → auto-fixée
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Generic, Literal, TypeVar
+
+from src.models.domain import (
+    CopyGrade,
+    DiagnosticResult,
+    Exercise,
+    QuestionGrade,
+    RemediationSubject,
+    RootCauseError,
+    TranscriptionResult,
+)
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Types de base
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ValidationIssue:
+    """
+    Un problème détecté lors de la validation d'une étape du pipeline.
+
+    Attributs :
+        code        Code machine unique (voir module docstring pour la liste).
+        severity    "warning" = corrigé automatiquement, pipeline continue.
+                    "error"   = bloquant, pipeline arrêté.
+        message     Description lisible, affichable à l'enseignant.
+        auto_fixed  True si la donnée a été modifiée automatiquement pour
+                    corriger le problème.
+    """
+    code: str
+    severity: Literal["warning", "error"]
+    message: str
+    auto_fixed: bool = False
+
+    def __str__(self) -> str:
+        tag = "AUTO-FIXÉ" if self.auto_fixed else ("⚠ AVERT." if self.severity == "warning" else "✗ ERREUR")
+        return f"[{tag}] {self.code} — {self.message}"
+
+
+@dataclass
+class ValidationResult(Generic[T]):
+    """
+    Résultat d'une validation.
+
+    Attributs :
+        data    Donnée validée, potentiellement corrigée automatiquement.
+        issues  Liste des problèmes détectés (vide = tout OK).
+
+    Propriétés :
+        valid           True si aucune erreur bloquante (warnings acceptés).
+        has_warnings    True si au moins un warning.
+        has_errors      True si au moins une erreur bloquante.
+        summary         Résumé court lisible, ex : "2 avertissement(s) auto-fixé(s)".
+        auto_fixes      Liste des seuls problèmes corrigés automatiquement.
+    """
+    data: T
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+    @property
+    def valid(self) -> bool:
+        return not self.has_errors
+
+    @property
+    def has_warnings(self) -> bool:
+        return any(i.severity == "warning" for i in self.issues)
+
+    @property
+    def has_errors(self) -> bool:
+        return any(i.severity == "error" for i in self.issues)
+
+    @property
+    def auto_fixes(self) -> list[ValidationIssue]:
+        return [i for i in self.issues if i.auto_fixed]
+
+    @property
+    def summary(self) -> str:
+        if not self.issues:
+            return "OK"
+        n_err = sum(1 for i in self.issues if i.severity == "error")
+        n_fix = sum(1 for i in self.issues if i.auto_fixed)
+        n_warn = sum(1 for i in self.issues if i.severity == "warning" and not i.auto_fixed)
+        parts = []
+        if n_err:
+            parts.append(f"{n_err} erreur(s) bloquante(s)")
+        if n_fix:
+            parts.append(f"{n_fix} correction(s) auto")
+        if n_warn:
+            parts.append(f"{n_warn} avertissement(s)")
+        return " · ".join(parts)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validateur ① — Transcription
+# ══════════════════════════════════════════════════════════════════════════════
+
+def validate_transcription(
+    result: TranscriptionResult,
+    *,
+    min_confidence: float = 0.40,
+    max_illisible_ratio: float = 0.60,
+) -> ValidationResult[TranscriptionResult]:
+    """
+    Valide la transcription produite par Gemini ou Claude.
+
+    Erreurs bloquantes :
+    - Aucune page dans la transcription.
+    - Toutes les pages sont vides ou [ILLISIBLE].
+
+    Avertissements (non bloquants) :
+    - Confiance moyenne < min_confidence (défaut 40 %).
+    - Plus de max_illisible_ratio pages contiennent [ILLISIBLE] (défaut 60 %).
+
+    Args :
+        result              TranscriptionResult issu du client IA.
+        min_confidence      Seuil bas de confiance acceptable (0.0–1.0).
+        max_illisible_ratio Ratio max de pages illisibles toléré (0.0–1.0).
+
+    Returns :
+        ValidationResult[TranscriptionResult]
+    """
+    issues: list[ValidationIssue] = []
+
+    # ── Erreur : aucune page ───────────────────────────────────────────────────
+    if not result.pages:
+        issues.append(ValidationIssue(
+            code="NO_PAGES",
+            severity="error",
+            message="La transcription ne contient aucune page — vérifiez le fichier uploadé.",
+        ))
+        return _done("Transcription", result, issues)
+
+    # ── Erreur : tout illisible ────────────────────────────────────────────────
+    non_empty_pages = [
+        p for p in result.pages
+        if p.content.strip() and p.content.strip() != "[ILLISIBLE]"
+    ]
+    if not non_empty_pages:
+        issues.append(ValidationIssue(
+            code="ALL_PAGES_EMPTY",
+            severity="error",
+            message=(
+                "Toutes les pages transcrites sont vides ou [ILLISIBLE]. "
+                "Améliorez la qualité du scan (150 DPI recommandé)."
+            ),
+        ))
+        return _done("Transcription", result, issues)
+
+    # ── Avertissement : confiance faible ──────────────────────────────────────
+    avg_conf = sum(p.confidence for p in result.pages) / len(result.pages)
+    if avg_conf < min_confidence:
+        issues.append(ValidationIssue(
+            code="LOW_CONFIDENCE",
+            severity="warning",
+            message=(
+                f"Confiance de transcription faible : {avg_conf:.0%} "
+                f"(seuil minimum : {min_confidence:.0%}). "
+                "Les résultats de correction peuvent être imprécis."
+            ),
+        ))
+
+    # ── Avertissement : trop d'illisible ──────────────────────────────────────
+    illisible_count = sum(1 for p in result.pages if "[ILLISIBLE]" in p.content)
+    illisible_ratio = illisible_count / len(result.pages)
+    if illisible_ratio > max_illisible_ratio:
+        issues.append(ValidationIssue(
+            code="HIGH_ILLISIBLE_RATIO",
+            severity="warning",
+            message=(
+                f"{illisible_count}/{len(result.pages)} page(s) contiennent des zones illisibles "
+                f"({illisible_ratio:.0%} > seuil {max_illisible_ratio:.0%}). "
+                "Vérifiez la luminosité et la netteté du scan."
+            ),
+        ))
+
+    return _done("Transcription", result, issues)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validateur ② — Correction
+# ══════════════════════════════════════════════════════════════════════════════
+
+def validate_grading(
+    grade: CopyGrade,
+    *,
+    rubric_provided: bool = False,
+    low_conf_threshold: float = 0.60,
+    suspicious_ratio: float = 0.95,
+) -> ValidationResult[CopyGrade]:
+    """
+    Valide et corrige automatiquement les incohérences dans la correction.
+
+    Corrections automatiques (severity="warning", auto_fixed=True) :
+    - total_score recalculé si Σ scores individuels ≠ valeur déclarée.
+    - total_possible recalculé si len(questions) ≠ valeur déclarée.
+    - requires_review forcé à True pour toute question avec confidence < seuil.
+
+    Erreurs bloquantes :
+    - Aucune question évaluée (total_possible=0).
+
+    Avertissements non bloquants :
+    - IDs de questions dupliqués.
+    - ≥ suspicious_ratio de scores à 0 sans barème fourni.
+    - ≥ suspicious_ratio de scores à 1 sans barème fourni.
+
+    Args :
+        grade               CopyGrade issu du client de correction.
+        rubric_provided     True si un barème a été fourni par l'enseignant.
+        low_conf_threshold  Seuil de confiance sous lequel requires_review est forcé.
+        suspicious_ratio    Ratio de scores identiques déclenchant l'alerte (0.0–1.0).
+
+    Returns :
+        ValidationResult[CopyGrade]
+    """
+    issues: list[ValidationIssue] = []
+    questions = list(grade.questions)
+
+    # ── Erreur bloquante : aucune question ────────────────────────────────────
+    if not questions:
+        issues.append(ValidationIssue(
+            code="NO_QUESTIONS",
+            severity="error",
+            message=(
+                "La correction ne contient aucune question évaluée. "
+                "Fournissez un barème ou un scan de meilleure qualité."
+            ),
+        ))
+        return _done("Correction", grade, issues)
+
+    # ── Correction auto : total_score ─────────────────────────────────────────
+    real_score = sum(q.score for q in questions)
+    if grade.total_score != real_score:
+        issues.append(ValidationIssue(
+            code="SCORE_SUM_MISMATCH",
+            severity="warning",
+            message=(
+                f"total_score déclaré ({grade.total_score}) ≠ somme réelle ({real_score}). "
+                f"Corrigé : {grade.total_score} → {real_score}."
+            ),
+            auto_fixed=True,
+        ))
+        grade = _rebuild_grade(grade, total_score=real_score)
+
+    # ── Correction auto : total_possible ─────────────────────────────────────
+    if grade.total_possible != len(questions):
+        issues.append(ValidationIssue(
+            code="POSSIBLE_COUNT_MISMATCH",
+            severity="warning",
+            message=(
+                f"total_possible déclaré ({grade.total_possible}) ≠ "
+                f"nombre de questions ({len(questions)}). "
+                f"Corrigé : {grade.total_possible} → {len(questions)}."
+            ),
+            auto_fixed=True,
+        ))
+        grade = _rebuild_grade(grade, total_possible=len(questions))
+
+    # ── Correction auto : requires_review sur faible confiance ────────────────
+    fixed_qs: list[QuestionGrade] = []
+    n_forced = 0
+    for q in grade.questions:
+        if q.confidence < low_conf_threshold and not q.requires_review:
+            fixed_qs.append(QuestionGrade(
+                rubric_item_id=q.rubric_item_id,
+                score=q.score,
+                confidence=q.confidence,
+                comment=q.comment,
+                observed_answer=q.observed_answer,
+                requires_review=True,
+            ))
+            n_forced += 1
+        else:
+            fixed_qs.append(q)
+
+    if n_forced:
+        issues.append(ValidationIssue(
+            code="LOW_CONF_REVIEW_FORCED",
+            severity="warning",
+            message=(
+                f"{n_forced} question(s) avec confiance < {low_conf_threshold:.0%} : "
+                f"requires_review forcé à True pour révision enseignant."
+            ),
+            auto_fixed=True,
+        ))
+        grade = _rebuild_grade(grade, questions=fixed_qs)
+
+    # ── Avertissement : IDs dupliqués ─────────────────────────────────────────
+    ids = [q.rubric_item_id for q in grade.questions]
+    duplicates = sorted({qid for qid in ids if ids.count(qid) > 1})
+    if duplicates:
+        issues.append(ValidationIssue(
+            code="DUPLICATE_QUESTION_IDS",
+            severity="warning",
+            message=f"Identifiants de questions dupliqués : {', '.join(duplicates)}.",
+        ))
+
+    # ── Avertissement : résultat suspect sans barème ──────────────────────────
+    if not rubric_provided and len(grade.questions) >= 3:
+        n_zero = sum(1 for q in grade.questions if q.score == 0)
+        n_one = sum(1 for q in grade.questions if q.score == 1)
+        total = len(grade.questions)
+
+        if n_zero == total:
+            issues.append(ValidationIssue(
+                code="SUSPICIOUS_ALL_ZERO",
+                severity="warning",
+                message=(
+                    f"Tous les {total} scores sont à 0 sans barème fourni — résultat suspect. "
+                    "Conseil : fournissez un barème ou vérifiez la qualité du scan."
+                ),
+            ))
+        elif n_one == total:
+            issues.append(ValidationIssue(
+                code="SUSPICIOUS_ALL_ONE",
+                severity="warning",
+                message=(
+                    f"Tous les {total} scores sont à 1 sans barème fourni — "
+                    "résultat peut-être trop indulgent. Vérification recommandée."
+                ),
+            ))
+        elif n_zero / total >= suspicious_ratio:
+            issues.append(ValidationIssue(
+                code="SUSPICIOUS_HIGH_ZERO_RATIO",
+                severity="warning",
+                message=f"{n_zero}/{total} scores à 0 sans barème ({n_zero/total:.0%}) — vérification recommandée.",
+            ))
+        elif n_one / total >= suspicious_ratio:
+            issues.append(ValidationIssue(
+                code="SUSPICIOUS_HIGH_ONE_RATIO",
+                severity="warning",
+                message=f"{n_one}/{total} scores à 1 sans barème ({n_one/total:.0%}) — vérification recommandée.",
+            ))
+
+    return _done("Correction", grade, issues)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validateur ③ — Diagnostic
+# ══════════════════════════════════════════════════════════════════════════════
+
+def validate_diagnostic(
+    diagnostic: DiagnosticResult,
+    grade: CopyGrade,
+) -> ValidationResult[DiagnosticResult]:
+    """
+    Valide la cohérence du diagnostic pédagogique par rapport aux scores.
+
+    Corrections automatiques :
+    - Supprime des "strengths" toute entrée qui mentionne une question à score=0.
+    - Supprime des "weaknesses" toute entrée qui mentionne une question à score=1.
+    - Supprime des root_causes les linked_questions ne faisant pas partie
+      des questions évaluées.
+
+    Avertissements non bloquants :
+    - Plan de remédiation vide malgré des lacunes identifiées.
+    - Diagnostic entièrement vide (ni forces ni lacunes).
+
+    Args :
+        diagnostic  DiagnosticResult issu du client de diagnostic.
+        grade       CopyGrade validé (après validate_grading).
+
+    Returns :
+        ValidationResult[DiagnosticResult]
+    """
+    issues: list[ValidationIssue] = []
+
+    # Table de correspondance id → score
+    score_by_id: dict[str, int] = {q.rubric_item_id: q.score for q in grade.questions}
+    all_ids: set[str] = set(score_by_id)
+
+    def _contains_zero_question(text: str) -> bool:
+        """True si le texte mentionne explicitement un ID dont le score est 0."""
+        return any(qid in text and score_by_id.get(qid, 1) == 0 for qid in all_ids)
+
+    def _contains_one_question(text: str) -> bool:
+        """True si le texte mentionne explicitement un ID dont le score est 1."""
+        return any(qid in text and score_by_id.get(qid, 0) == 1 for qid in all_ids)
+
+    # ── Correction auto : forces incohérentes ─────────────────────────────────
+    clean_strengths = [s for s in diagnostic.strengths if not _contains_zero_question(s)]
+    n_removed_s = len(diagnostic.strengths) - len(clean_strengths)
+    if n_removed_s:
+        issues.append(ValidationIssue(
+            code="STRENGTH_ON_ZERO_SCORE",
+            severity="warning",
+            message=(
+                f"{n_removed_s} force(s) supprimée(s) : référençaient des questions "
+                f"ayant score=0, ce qui est contradictoire."
+            ),
+            auto_fixed=True,
+        ))
+
+    # ── Correction auto : lacunes incohérentes ────────────────────────────────
+    clean_weaknesses = [w for w in diagnostic.weaknesses if not _contains_one_question(w)]
+    n_removed_w = len(diagnostic.weaknesses) - len(clean_weaknesses)
+    if n_removed_w:
+        issues.append(ValidationIssue(
+            code="WEAKNESS_ON_ONE_SCORE",
+            severity="warning",
+            message=(
+                f"{n_removed_w} lacune(s) supprimée(s) : référençaient des questions "
+                f"ayant score=1, ce qui est contradictoire."
+            ),
+            auto_fixed=True,
+        ))
+
+    # ── Correction auto : root_causes avec IDs invalides ─────────────────────
+    clean_rc: list[RootCauseError] = []
+    n_removed_rc = 0
+    for rc in diagnostic.root_causes:
+        valid_links = [qid for qid in rc.linked_questions if qid in all_ids]
+        if rc.linked_questions and not valid_links:
+            # Tous les liens pointent vers des questions inexistantes → suppression
+            n_removed_rc += 1
+        else:
+            clean_rc.append(RootCauseError(
+                visible_error=rc.visible_error,
+                hidden_cause=rc.hidden_cause,
+                linked_questions=valid_links,
+            ))
+    if n_removed_rc:
+        issues.append(ValidationIssue(
+            code="ROOT_CAUSE_INVALID_LINKS",
+            severity="warning",
+            message=(
+                f"{n_removed_rc} cause(s) cachée(s) supprimée(s) : "
+                f"liaient uniquement des questions absentes de la correction."
+            ),
+            auto_fixed=True,
+        ))
+
+    # ── Avertissement : plan de remédiation vide avec lacunes ─────────────────
+    if clean_weaknesses and not diagnostic.remediation_plan:
+        issues.append(ValidationIssue(
+            code="EMPTY_REMEDIATION_PLAN",
+            severity="warning",
+            message=(
+                f"{len(clean_weaknesses)} lacune(s) identifiée(s) mais plan de remédiation vide. "
+                "Le module de remédiation ne sera pas alimenté correctement."
+            ),
+        ))
+
+    # ── Avertissement : diagnostic entièrement vide ───────────────────────────
+    if not clean_strengths and not clean_weaknesses:
+        issues.append(ValidationIssue(
+            code="EMPTY_DIAGNOSTIC",
+            severity="warning",
+            message=(
+                "Le diagnostic ne contient ni forces ni lacunes — "
+                "analyse probablement insuffisante. Révision manuelle recommandée."
+            ),
+        ))
+
+    fixed = DiagnosticResult(
+        copy_id=diagnostic.copy_id,
+        strengths=clean_strengths,
+        weaknesses=clean_weaknesses,
+        root_causes=clean_rc,
+        skills=diagnostic.skills,
+        remediation_plan=diagnostic.remediation_plan,
+    )
+    return _done("Diagnostic", fixed, issues)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Validateur ④ — Remédiation
+# ══════════════════════════════════════════════════════════════════════════════
+
+def validate_remediation(
+    remediation: RemediationSubject,
+    diagnostic: DiagnosticResult,
+) -> ValidationResult[RemediationSubject]:
+    """
+    Valide l'alignement du sujet de remédiation avec le diagnostic.
+
+    Corrections automatiques :
+    - Renumérote les exercices si la séquence n'est pas 1, 2, 3, …
+
+    Erreurs bloquantes :
+    - Aucun exercice généré.
+
+    Avertissements non bloquants :
+    - Nombre de séries ≠ nombre de lacunes (5 exercices par lacune attendus).
+    - Exercices sans énoncé (champ question vide).
+
+    Args :
+        remediation  RemediationSubject issu du client de remédiation.
+        diagnostic   DiagnosticResult validé (après validate_diagnostic).
+
+    Returns :
+        ValidationResult[RemediationSubject]
+    """
+    issues: list[ValidationIssue] = []
+    exercises = list(remediation.exercises)
+
+    # ── Erreur bloquante : aucun exercice ─────────────────────────────────────
+    if not exercises:
+        issues.append(ValidationIssue(
+            code="NO_EXERCISES",
+            severity="error",
+            message=(
+                "Le sujet de remédiation est vide — aucun exercice généré. "
+                "Vérifiez que le diagnostic contient des lacunes."
+            ),
+        ))
+        return _done("Remédiation", remediation, issues)
+
+    # ── Avertissement : nombre de séries incohérent ───────────────────────────
+    n_weaknesses = len(diagnostic.weaknesses) or len(diagnostic.root_causes)
+    n_series = len({ex.topic for ex in exercises})
+    if n_weaknesses > 0 and n_series != n_weaknesses:
+        issues.append(ValidationIssue(
+            code="SERIES_COUNT_MISMATCH",
+            severity="warning",
+            message=(
+                f"{n_series} série(s) générée(s) pour {n_weaknesses} lacune(s). "
+                f"Attendu : {n_weaknesses} série(s) × 5 exercices = {n_weaknesses * 5} exercices."
+            ),
+        ))
+
+    # ── Avertissement : exercices sans énoncé ─────────────────────────────────
+    empty_nums = [ex.number for ex in exercises if not ex.question.strip()]
+    if empty_nums:
+        issues.append(ValidationIssue(
+            code="EMPTY_EXERCISE_QUESTIONS",
+            severity="warning",
+            message=f"Exercice(s) sans énoncé : numéros {empty_nums}.",
+        ))
+
+    # ── Correction auto : renumérote si non séquentiel ─────────────────────────
+    expected = list(range(1, len(exercises) + 1))
+    actual = [ex.number for ex in exercises]
+    if actual != expected:
+        preview = str(actual[:6]) + ("…" if len(actual) > 6 else "")
+        fixed_exercises = [
+            Exercise(number=i + 1, topic=ex.topic, question=ex.question, hint=ex.hint)
+            for i, ex in enumerate(exercises)
+        ]
+        issues.append(ValidationIssue(
+            code="EXERCISE_RENUMBERED",
+            severity="warning",
+            message=f"Numérotation corrigée : {preview} → 1, 2, 3, …",
+            auto_fixed=True,
+        ))
+        remediation = RemediationSubject(copy_id=remediation.copy_id, exercises=fixed_exercises)
+
+    return _done("Remédiation", remediation, issues)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Helpers internes
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _done(stage: str, data: T, issues: list[ValidationIssue]) -> ValidationResult[T]:
+    """Log le résultat et retourne le ValidationResult."""
+    if not issues:
+        logger.warning("Orchestrateur [%s] → OK", stage)
+    else:
+        for issue in issues:
+            if issue.severity == "error":
+                logger.error("Orchestrateur [%s] %s", stage, issue)
+            else:
+                logger.warning("Orchestrateur [%s] %s", stage, issue)
+    return ValidationResult(data=data, issues=issues)
+
+
+def _rebuild_grade(
+    grade: CopyGrade,
+    *,
+    total_score: int | None = None,
+    total_possible: int | None = None,
+    questions: list[QuestionGrade] | None = None,
+) -> CopyGrade:
+    """Recrée un CopyGrade immuable avec les champs modifiés."""
+    return CopyGrade(
+        copy_id=grade.copy_id,
+        total_score=total_score if total_score is not None else grade.total_score,
+        total_possible=total_possible if total_possible is not None else grade.total_possible,
+        questions=questions if questions is not None else grade.questions,
+        expert_instructions_used=grade.expert_instructions_used,
+    )

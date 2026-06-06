@@ -199,6 +199,7 @@ class DeepSeekClient:
         rubric: Rubric,
         subject_text: str,
         expert_instructions: str = "",
+        temperature: float = 0,
     ) -> ClaudeResponse:
         """Correction selon barème via DeepSeek V3 — json_object forcé."""
         logger.info("[%s] DeepSeek correction — modèle : %s",
@@ -208,9 +209,21 @@ class DeepSeekClient:
             if expert_instructions.strip() else ""
         )
         auto_block = (
-            "\n\nINSTRUCTION SPÉCIALE : Aucun barème fourni. "
-            "Identifie toutes les questions, évalue chacune sur 0/1. "
-            "Génère les identifiants Q1, Q2a, Q2b, etc."
+            "\n\nINSTRUCTION SPÉCIALE : Aucun barème ni corrigé fourni. "
+            "Procède en trois étapes :\n"
+            "1. Identifie toutes les questions mathématiques visibles dans la transcription. "
+            "Génère les identifiants Q1, Q2a, Q2b, etc.\n"
+            "2. Pour chaque question identifiée, RÉSOUS-LA TOI-MÊME pour obtenir la réponse correcte "
+            "de référence — tu es mathématicien, utilise tes connaissances.\n"
+            "3. Compare la réponse de l'élève (transcription) avec ta solution. "
+            "Attribue 1 si l'élève a la bonne réponse, 0 sinon. "
+            "Dans le commentaire, indique brièvement ce que l'élève a fait (juste ou faux) et, "
+            "si faux, ce que valait la réponse correcte.\n"
+            "Fixe total_possible = nombre de questions identifiées.\n"
+            "Si aucune question n'est identifiable (transcription vide), retourne une entrée unique : "
+            "rubric_item_id='Q1', score=0, confidence=0.1, requires_review=true, "
+            "comment='Copie illisible — révision manuelle requise', observed_answer='[ILLISIBLE]', "
+            "total_possible=1."
             if not rubric.items else ""
         )
 
@@ -229,16 +242,23 @@ class DeepSeekClient:
                 messages=[{"role": "user", "content": user_content}],
                 response_format={"type": "json_object"},
                 max_tokens=8192,
-                temperature=0.1,
+                temperature=temperature,
             )
             raw = response.choices[0].message.content or ""
             result = _parse_json_response(raw, CopyGrade)
             if result.success and result.data is not None and expert_instructions.strip():
                 result.data.expert_instructions_used = True
-            logger.info(
-                "DeepSeek V3 grading OK — tokens: %d in / %d out",
-                response.usage.prompt_tokens, response.usage.completion_tokens,
-            )
+            if result.success and result.data is not None:
+                logger.warning(
+                    "DeepSeek V3 grading OK — tokens: %d in / %d out",
+                    response.usage.prompt_tokens, response.usage.completion_tokens,
+                )
+                for q in result.data.questions:
+                    logger.warning(
+                        "  %s → score=%d conf=%.0f%% | observed='%s' | comment='%s'",
+                        q.rubric_item_id, q.score, q.confidence * 100,
+                        q.observed_answer[:80], q.comment[:80],
+                    )
             return result
         except Exception as e:
             logger.error("DeepSeek V3 grade erreur : %s", e)
@@ -269,7 +289,7 @@ class DeepSeekClient:
             response = self._client.chat.completions.create(
                 model=settings.deepseek_model_r1,
                 messages=[{"role": "user", "content": user_content}],
-                max_tokens=4096,
+                max_tokens=8192,
                 # R1 : pas de temperature, pas de response_format, pas de system
             )
             raw = response.choices[0].message.content or ""

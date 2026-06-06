@@ -362,6 +362,18 @@ def _display_results(result, key_prefix: str = "") -> None:
     if result.quality.global_quality == "poor":
         st.warning("Qualité image insuffisante — vérifiez les pages signalées.")
 
+    # Alertes orchestrateur
+    auto_fixes = [i for i in result.validation_issues if i.auto_fixed]
+    warnings = [i for i in result.validation_issues if not i.auto_fixed and i.severity == "warning"]
+    if auto_fixes:
+        with st.expander(f"Orchestrateur — {len(auto_fixes)} correction(s) automatique(s)"):
+            for issue in auto_fixes:
+                st.caption(f"✓ [{issue.code}] {issue.message}")
+    if warnings:
+        with st.expander(f"Orchestrateur — {len(warnings)} avertissement(s) à vérifier"):
+            for issue in warnings:
+                st.warning(f"[{issue.code}] {issue.message}")
+
     avg_conf = (
         sum(q.confidence for q in grade.questions) / len(grade.questions)
         if grade.questions else 0.0

@@ -109,6 +109,35 @@ _GRADING_TOOL: dict[str, Any] = {
     },
 }
 
+_QUESTIONS_EXTRACTION_TOOL: dict[str, Any] = {
+    "name": "save_questions",
+    "description": "Sauvegarde la liste des questions identifiées dans la transcription.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "description": "Liste ordonnée de toutes les questions et sous-questions.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Identifiant court et cohérent, ex : Q1, Q2a, Q2b, Q3.",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Libellé court de la question, ex : 'Calcul de volume'.",
+                        },
+                    },
+                    "required": ["id", "label"],
+                },
+            },
+        },
+        "required": ["questions"],
+    },
+}
+
 _RUBRIC_EXTRACTION_TOOL: dict[str, Any] = {
     "name": "save_rubric",
     "description": "Extrait les items du barème depuis le document fourni.",
@@ -281,6 +310,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_heavy,
             max_tokens=_TOKENS_PER_BATCH,
+            temperature=0,
             tools=[_TRANSCRIPTION_TOOL],
             tool_choice={"type": "tool", "name": "save_transcription"},
             messages=[{"role": "user", "content": content}],
@@ -297,6 +327,7 @@ class ClaudeClient:
         rubric: Rubric,
         subject_text: str,
         expert_instructions: str = "",
+        temperature: float = 0,
     ) -> ClaudeResponse:
         logger.info("[%s] Claude correction — modèle : %s",
                     transcription.copy_id, settings.claude_model_heavy)
@@ -305,9 +336,21 @@ class ClaudeClient:
             if expert_instructions.strip() else ""
         )
         auto_block = (
-            "\n\nINSTRUCTION SPÉCIALE : Aucun barème fourni. "
-            "Identifie toutes les questions, évalue chacune sur 0/1. "
-            "Génère les identifiants Q1, Q2a, Q2b, etc."
+            "\n\nINSTRUCTION SPÉCIALE : Aucun barème ni corrigé fourni. "
+            "Procède en trois étapes :\n"
+            "1. Identifie toutes les questions mathématiques visibles dans la transcription. "
+            "Génère les identifiants Q1, Q2a, Q2b, etc.\n"
+            "2. Pour chaque question identifiée, RÉSOUS-LA TOI-MÊME pour obtenir la réponse correcte "
+            "de référence — tu es mathématicien, utilise tes connaissances.\n"
+            "3. Compare la réponse de l'élève (transcription) avec ta solution. "
+            "Attribue 1 si l'élève a la bonne réponse, 0 sinon. "
+            "Dans le commentaire, indique brièvement ce que l'élève a fait (juste ou faux) et, "
+            "si faux, ce que valait la réponse correcte.\n"
+            "Fixe total_possible = nombre de questions identifiées.\n"
+            "Si aucune question n'est identifiable (transcription vide), retourne une entrée unique : "
+            "rubric_item_id='Q1', score=0, confidence=0.1, requires_review=true, "
+            "comment='Copie illisible — révision manuelle requise', observed_answer='[ILLISIBLE]', "
+            "total_possible=1."
             if not rubric.items else ""
         )
 
@@ -321,6 +364,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_heavy,
             max_tokens=8192,
+            temperature=temperature,
             tools=[_GRADING_TOOL],
             tool_choice={"type": "tool", "name": "save_grading"},
             messages=[
@@ -356,6 +400,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_light,
             max_tokens=4096,
+            temperature=0,
             messages=[
                 {
                     "role": "user",
@@ -399,6 +444,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_heavy,
             max_tokens=8192,   # 35 exercices (~150 tok/exo) = ~5 250 tok — 4096 coupait après la 1re série
+            temperature=0,
             messages=[
                 {
                     "role": "user",
@@ -453,6 +499,7 @@ class ClaudeClient:
             response = self.client.messages.create(
                 model=settings.claude_model_light,
                 max_tokens=64,
+                temperature=0,
                 messages=[{"role": "user", "content": content}],
             )
             name = response.content[0].text.strip()
@@ -463,6 +510,84 @@ class ClaudeClient:
         except Exception as e:
             logger.warning("extract_student_name échoué : %s", e)
             return ""
+
+    # ── Extraction des questions depuis la transcription ──────────────────────
+
+    @_retry
+    def extract_questions_from_transcription(
+        self, transcription: TranscriptionResult
+    ) -> Rubric:
+        """
+        Extrait la liste stable des questions depuis la transcription pour créer
+        un barème virtuel utilisé quand aucun barème n'est fourni.
+
+        Sépare l'identification des questions du jugement de correction :
+        cette passe produit une liste déterministe (tool_use, temperature implicitement
+        faible) qui sera passée comme rubric fixe à l'étape de grading.
+
+        Retourne un Rubric vide si aucune question n'est identifiable.
+        """
+        logger.info(
+            "[%s] Extraction des questions depuis la transcription (modèle : %s)…",
+            transcription.copy_id, settings.claude_model_heavy,
+        )
+        content_parts = [
+            f"Page {p.page_number} :\n{p.content}"
+            for p in transcription.pages
+            if p.content.strip() and p.content.strip() != "[ILLISIBLE]"
+        ]
+        if not content_parts:
+            logger.warning(
+                "[%s] Transcription vide — impossible d'extraire les questions.",
+                transcription.copy_id,
+            )
+            return Rubric(subject="mathematics", total_points=0, items=[])
+
+        prompt = (
+            "Analyse cette transcription de copie d'élève de mathématiques.\n"
+            "Identifie TOUTES les questions et sous-questions visibles "
+            "(cherche les numéros d'exercices, lettres de sous-questions, etc.).\n"
+            "Génère des identifiants courts et cohérents : Q1, Q2a, Q2b, Q3, etc.\n"
+            "Ne note pas les réponses — liste uniquement les questions.\n\n"
+            "TRANSCRIPTION :\n" + "\n\n".join(content_parts)
+        )
+
+        response = self.client.messages.create(
+            model=settings.claude_model_heavy,
+            max_tokens=1024,
+            temperature=0,
+            tools=[_QUESTIONS_EXTRACTION_TOOL],
+            tool_choice={"type": "tool", "name": "save_questions"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        tool_block = next(
+            (b for b in response.content if b.type == "tool_use"), None
+        )
+        if tool_block is None or not isinstance(tool_block.input, dict):
+            logger.warning(
+                "[%s] Extraction des questions : aucun bloc tool_use reçu.",
+                transcription.copy_id,
+            )
+            return Rubric(subject="mathematics", total_points=0, items=[])
+
+        raw_questions = tool_block.input.get("questions", [])
+        items = [
+            RubricItem(
+                id=q.get("id", f"Q{i + 1}"),
+                label=q.get("label", ""),
+            )
+            for i, q in enumerate(raw_questions)
+            if isinstance(q, dict) and q.get("id")
+        ]
+
+        logger.warning(
+            "[%s] Barème virtuel extrait : %d question(s) — %s",
+            transcription.copy_id,
+            len(items),
+            ", ".join(item.id for item in items[:10]) + ("…" if len(items) > 10 else ""),
+        )
+        return Rubric(subject="mathematics", total_points=len(items), items=items)
 
     # ── Énoncé ────────────────────────────────────────────────────────────────
 
@@ -495,6 +620,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_light,
             max_tokens=2048,
+            temperature=0,
             messages=[{"role": "user", "content": content}],
         )
         return response.content[0].text.strip()
@@ -536,6 +662,7 @@ class ClaudeClient:
         response = self.client.messages.create(
             model=settings.claude_model_heavy,
             max_tokens=2048,
+            temperature=0,
             tools=[_RUBRIC_EXTRACTION_TOOL],
             tool_choice={"type": "tool", "name": "save_rubric"},
             messages=[{"role": "user", "content": content}],

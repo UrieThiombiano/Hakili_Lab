@@ -20,6 +20,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 from PIL import Image
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from src.core.config import settings
 from src.models.domain import (
@@ -122,6 +123,24 @@ def _repair_json(text: str) -> str:
     return text + "".join(close_map[c] for c in reversed(stack))
 
 
+# ── Retry 429 ────────────────────────────────────────────────────────────────
+
+def _is_retryable_gemini(exc: BaseException) -> bool:
+    msg = str(exc)
+    # Quota journalier épuisé : inutile de réessayer, aller directement au fallback
+    if "PerDay" in msg or "PerDayPer" in msg:
+        return False
+    return "429" in msg or "RESOURCE_EXHAUSTED" in msg or "quota" in msg.lower()
+
+
+_retry_gemini = retry(
+    retry=retry_if_exception(_is_retryable_gemini),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=6, max=60),
+    reraise=True,
+)
+
+
 # ── Client principal ──────────────────────────────────────────────────────────
 
 class GeminiTranscriptionClient:
@@ -143,9 +162,22 @@ class GeminiTranscriptionClient:
     # ── API publique (même signature que ClaudeClient.transcribe) ─────────────
 
     def transcribe(self, copy_id: str, image_paths: list[Path]) -> ClaudeResponse:
-        if len(image_paths) <= _MAX_PAGES_PER_BATCH:
-            return self._transcribe_batch(copy_id, image_paths, page_offset=0)
-        return self._transcribe_batched(copy_id, image_paths)
+        try:
+            if len(image_paths) <= _MAX_PAGES_PER_BATCH:
+                return self._transcribe_batch(copy_id, image_paths, page_offset=0)
+            return self._transcribe_batched(copy_id, image_paths)
+        except Exception as e:
+            # Tenacity a épuisé ses tentatives et re-lève l'exception.
+            # On la convertit en ClaudeResponse(success=False) pour déclencher
+            # proprement le fallback Claude dans le pipeline.
+            logger.error(
+                "Gemini transcription abandonnée après retries (copy_id=%s) : %s",
+                copy_id, e,
+            )
+            return ClaudeResponse(
+                success=False, data=None, confidence=0.0,
+                raw_response="", error=str(e),
+            )
 
     # ── Batching ──────────────────────────────────────────────────────────────
 
@@ -181,6 +213,7 @@ class GeminiTranscriptionClient:
             error=None,
         )
 
+    @_retry_gemini
     def _transcribe_batch(
         self, copy_id: str, image_paths: list[Path], page_offset: int = 0
     ) -> ClaudeResponse:
@@ -264,6 +297,12 @@ class GeminiTranscriptionClient:
             )
 
         except Exception as e:
+            if _is_retryable_gemini(e):
+                logger.warning(
+                    "Gemini 429 (copy_id=%s, offset=%d) — tenacity va réessayer : %s",
+                    copy_id, page_offset, e,
+                )
+                raise  # laisse tenacity gérer le retry
             logger.error(
                 "Erreur Gemini (copy_id=%s, offset=%d) : %s", copy_id, page_offset, e
             )
