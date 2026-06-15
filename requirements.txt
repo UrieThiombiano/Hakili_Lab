@@ -10,7 +10,7 @@ pyyaml>=6.0.2
 
 # --- Traitement image & PDF ---
 pillow==10.4.0
-opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
 pymupdf>=1.24.9        # wheel pré-compilé dispo 1.27+ pour Python 3.13 Windows
 
 # --- Génération PDF ---
@@ -32,7 +32,7 @@ mistralai>=1.0.0      # Mistral Small 3.1
 httpx>=0.28.1
 tenacity==8.5.0
 
-# --- Qualité code ---
-pytest==8.3.2
-ruff==0.5.7
-mypy==1.11.1
+# --- Qualité code (développement uniquement — ne pas inclure en prod) ---
+# pytest==8.3.2
+# ruff==0.5.7
+# mypy==1.11.1
