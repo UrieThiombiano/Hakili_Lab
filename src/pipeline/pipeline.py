@@ -89,16 +89,22 @@ def _make_diagnostic_client():
         from src.api.deepseek_client import DeepSeekClient
         return DeepSeekClient()
     if provider == "mistral" and settings.mistral_api_key:
-        from src.api.mistral_client import MistralRemediationClient
-        return MistralRemediationClient()
+        try:
+            from src.api.mistral_client import MistralRemediationClient
+            return MistralRemediationClient()
+        except (ImportError, Exception) as e:
+            logger.warning("Mistral diagnostic indisponible (%s) — fallback Claude", e)
     return ClaudeClient()
 
 
 def _make_remediation_client():
     provider = settings.remediation_provider.lower()
     if provider == "mistral" and settings.mistral_api_key:
-        from src.api.mistral_client import MistralRemediationClient
-        return MistralRemediationClient()
+        try:
+            from src.api.mistral_client import MistralRemediationClient
+            return MistralRemediationClient()
+        except (ImportError, Exception) as e:
+            logger.warning("Mistral remédiation indisponible (%s) — fallback Claude", e)
     if provider == "deepseek" and settings.deepseek_api_key:
         from src.api.deepseek_client import DeepSeekClient
         return DeepSeekClient()
