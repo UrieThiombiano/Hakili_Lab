@@ -25,10 +25,23 @@ meta:
 
 questions_numeriques:
 
-  - id: Q_NUM_01
+  - id: Q_NUM_01a
     numero: 1
     niveau_programme: ["CE2", "CM2"]
     points_originaux: 0.25
+    enonce_court: "Écrire en chiffres 'Une centaine quatre dizaines et sept unités'"
+    competences_cibles:
+      - "Comprendre la décomposition des nombres en centaines, dizaines, unités"
+      - "Écrire un nombre entier à partir de sa décomposition verbale"
+    lacune_type: "numération — lecture et écriture des entiers"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_NUM_01b
+    numero: 1
+    niveau_programme: ["CE2", "CM2"]
+    points_originaux: 0.5
     enonce_court: "Écrire en chiffres 'Une centaine quatre dizaines et sept unités'"
     competences_cibles:
       - "Comprendre la décomposition des nombres en centaines, dizaines, unités"
@@ -51,21 +64,9 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_03
-    numero: 3
-    niveau_programme: ["CM1"]
-    points_originaux: 0.5
-    enonce_court: "Écrire en lettres le nombre 26,1893"
-    competences_cibles:
-      - "Lire et écrire un nombre décimal en toutes lettres"
-      - "Maîtriser la lecture de la partie décimale (dixièmes, centièmes, millièmes)"
-    lacune_type: "numération décimale — lecture"
-    chunk_ids: []
-    score_max: 1
-    requires_review: false
 
-  - id: Q_NUM_04
-    numero: 4
+  - id: Q_NUM_03a
+    numero: 3
     niveau_programme: ["CM2"]
     points_originaux: 0.5
     enonce_court: "Donner les différentes parties du nombre 37,907 (partie entière, dixièmes, centièmes, millièmes)"
@@ -77,8 +78,10 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_05
-    numero: 5
+
+
+  - id: Q_NUM_03b
+    numero: 3
     niveau_programme: ["CM2"]
     points_originaux: 1.25
     enonce_court: "Identifier la place de chaque chiffre dans 175,62 (centaines, dizaines, unités, dixièmes, centièmes)"
@@ -90,8 +93,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_06
-    numero: 6
+  - id: Q_NUM_04a
+    numero: 4
     niveau_programme: ["CE1"]
     points_originaux: 0.25
     enonce_court: "Poser et effectuer 5537 + 319"
@@ -102,8 +105,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_07
-    numero: 7
+  - id: Q_NUM_04b
+    numero: 4
     niveau_programme: ["CE2"]
     points_originaux: 0.25
     enonce_court: "Compléter l'opération : 290 + ... = 3028"
@@ -115,8 +118,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_08
-    numero: 8
+  - id: Q_NUM_04c
+    numero: 4
     niveau_programme: ["CM2"]
     points_originaux: 0.5
     enonce_court: "Effectuer 15,345 × 53,5 et faire la preuve par 9"
@@ -128,8 +131,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_09
-    numero: 9
+  - id: Q_NUM_05
+    numero: 5
     niveau_programme: ["CM2"]
     points_originaux: 0.5
     enonce_court: "QCM — résultat de 4072 ÷ 12 parmi {37,933 ; 339,33 ; 339,45}"
@@ -141,8 +144,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_10
-    numero: 10
+  - id: Q_NUM_06a
+    numero: 06
     niveau_programme: ["CE1"]
     points_originaux: 0.5
     enonce_court: "Classer les nombres du plus petit au plus grand : 230, 112, 500, 489, 98"
@@ -153,9 +156,9 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_11
-    numero: 11
-    niveau_programme: ["CM1"]
+  - id: Q_NUM_06b
+    numero: 06
+    niveau_programme: ["CE2"]
     points_originaux: 0.5
     enonce_court: "Ranger par ordre décroissant : 33 ; 29,15 ; 1254 ; 39675 ; 49 ; 100"
     competences_cibles:
@@ -165,8 +168,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_12
-    numero: 12
+  - id: Q_NUM_07
+    numero: 07
     niveau_programme: ["CM2"]
     points_originaux: 0.5
     enonce_court: "Poser et effectuer 1093 ÷ 15 à 0,01 près"
@@ -177,8 +180,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_13
-    numero: 13
+  - id: Q_NUM_08
+    numero: 08
     niveau_programme: ["CM1"]
     points_originaux: 0.75
     enonce_court: "Ali né en 2003, Mariam née en 2006 — calculer leur âge en 2020 et déterminer le plus âgé"
@@ -190,8 +193,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_14
-    numero: 14
+  - id: Q_NUM_09
+    numero: 09
     niveau_programme: ["CM1"]
     points_originaux: 0.25
     enonce_court: "QCM — identifier la fraction représentée par la partie coloriée d'une figure"
@@ -202,11 +205,11 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_15
-    numero: 15
+  - id: Q_NUM_10
+    numero: 10
     niveau_programme: ["CM1"]
     points_originaux: 0.5
-    enonce_court: "Donner le numérateur et le dénominateur d'une fraction"
+    enonce_court: "Donner le numérateur et le dénominateur de 5/16"
     competences_cibles:
       - "Identifier les parties d'une fraction (numérateur, dénominateur)"
     lacune_type: "fractions — vocabulaire de base"
@@ -214,10 +217,10 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_16
-    numero: 16
+  - id: Q_NUM_11
+    numero: 11
     niveau_programme: ["CM2"]
-    points_originaux: 0.5
+    points_originaux: 0.25
     enonce_court: "Écrire 0,27 sous forme de fraction"
     competences_cibles:
       - "Convertir un nombre décimal en fraction"
@@ -226,8 +229,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_17
-    numero: 17
+  - id: Q_NUM_12
+    numero: 12
     niveau_programme: ["CM2"]
     points_originaux: 0.75
     enonce_court: "Effectuer des opérations sur les fractions (addition et multiplication)"
@@ -239,8 +242,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_18
-    numero: 18
+  - id: Q_NUM_13
+    numero: 13
     niveau_programme: ["CM2"]
     points_originaux: 0.25
     enonce_court: "Ousmane achète 8 m de tissu, utilise une fraction pour la couture — calculer la longueur"
@@ -251,8 +254,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_19
-    numero: 19
+  - id: Q_NUM_14
+    numero: 14
     niveau_programme: ["CE2"]
     points_originaux: 0.75
     enonce_court: "Compléter un tableau de proportionnalité"
@@ -264,8 +267,8 @@ questions_numeriques:
     score_max: 1
     requires_review: false
 
-  - id: Q_NUM_20
-    numero: 20
+  - id: Q_NUM_15
+    numero: 15
     niveau_programme: ["CM2"]
     points_originaux: 0.5
     enonce_court: "Adama : 30 œufs, en casse 6 — calculer le pourcentage d'œufs cassés"
@@ -434,6 +437,66 @@ questions_geometriques:
     competences_cibles:
       - "Connaître la formule de l'aire du disque : A = π×R²"
     lacune_type: "aires — disque"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_GEO_14
+    numero: 14
+    niveau_programme: ["CE1"]
+    points_originaux: 0.5
+    enonce_court: "Périmètre d'une table circulaire"
+    competences_cibles:
+      - "Connaître la formule du périmètre du cercle"
+    lacune_type: "périmètres — cercle"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_GEO_15
+    numero: 15
+    niveau_programme: ["CE1"]
+    points_originaux: 0.5
+    enonce_court: "Figure avec 4 cotés égaux et 4 angles droits — identifier la figure"
+    competences_cibles:
+      - "Savoir reconnatre un carré"
+    lacune_type: "figures — carré"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_GEO_16
+    numero: 16
+    niveau_programme: ["CM2"]
+    points_originaux: 0.5
+    enonce_court: "Construire un losange de 10 cm et 4 cm"
+    competences_cibles:
+      - "Savoir construire un losange"
+    lacune_type: "construction — losange"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_GEO_17
+    numero: 17
+    niveau_programme: ["CM2"]
+    points_originaux: 0.5
+    enonce_court: "Aire du trapèze"
+    competences_cibles:
+      - "Connaître la formule de l'aire du trapèze "
+    lacune_type: "aires-trapèze"
+    chunk_ids: []
+    score_max: 1
+    requires_review: false
+
+  - id: Q_GEO_18
+    numero: 18
+    niveau_programme: ["CM2"]
+    points_originaux: 0.5
+    enonce_court: "Déterminer la longueur d'un rectange de périmètre 48 m et largeur 10 m"
+    competences_cibles:
+      - "Connaître la formule du périmètre d'un rectangle"
+    lacune_type: "Périmètre -rectangle"
     chunk_ids: []
     score_max: 1
     requires_review: false
