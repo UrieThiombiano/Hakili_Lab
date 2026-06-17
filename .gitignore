@@ -28,6 +28,9 @@ data/outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Fichiers temporaires Microsoft Office
+~$*
 desktop.ini
 
 # Tests

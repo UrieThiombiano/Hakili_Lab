@@ -56,6 +56,14 @@ _TEST_CATALOG: dict[str, dict] = {
         "bareme_yaml": "bareme_test_6e.yaml",
         "corrige_yaml": "corrige_test_6e.yaml",
     },
+    "hakili_2ndeC_v1": {
+        "label": "Test diagnostique Hakili 2nde C v1",
+        "description": "Évaluation diagnostique niveau 2nde C (numériques et géométriques)",
+        "niveaux": "6e · 5e · 4e · 3e · 2nde",
+        "docx_filename": "EVALUATION 2ndC.docx",
+        "bareme_yaml": "bareme_test_2ndeC.yaml",
+        "corrige_yaml": "corrige_test_2ndeC.yaml",
+    },
 }
 
 
