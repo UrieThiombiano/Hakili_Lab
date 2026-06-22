@@ -105,14 +105,20 @@ def _extract_ascii_math(text: str) -> tuple[str, dict[str, str]]:
         idx += 1
         return key
 
-    # 1. sqrt(expr) → $\sqrt{expr}$  — traiter en premier (peut contenir ^)
+    # 1. sqrt(expr) → $\sqrt{expr}$  — traiter en premier (peut contenir ^ et pi)
+    # Le pattern gère un niveau de parenthèses imbriquées : sqrt(500 / (2 × pi))
     def _repl_sqrt(m: re.Match) -> str:
         inner = m.group(1).strip()
         # Exposants à l'intérieur du sqrt : a^2 → a^{2}
         inner = re.sub(r'([A-Za-z0-9])\^(\d+)', r'\1^{\2}', inner)
+        # pi → \pi  (déjà en mode math, pas besoin de $...$)
+        inner = re.sub(r'\bpi\b', r'\\pi', inner)
+        # × Unicode → \times  (déjà en mode math)
+        inner = inner.replace('×', r'\times')
         return ph(f'$\\sqrt{{{inner}}}$')
 
-    text = re.sub(r'sqrt\(([^)]*)\)', _repl_sqrt, text)
+    # (?:[^()]*|\([^()]*\))* : séquences sans parens OU groupe entre parens (1 niveau)
+    text = re.sub(r'sqrt\(((?:[^()]*|\([^()]*\))*)\)', _repl_sqrt, text)
 
     # 2. (a/b) fractions simples avec entiers → $\frac{a}{b}$
     text = re.sub(
@@ -198,7 +204,7 @@ def _build_context(
                     "topic":    _le(ex.topic),
                     "question": _sanitize_question(ex.question),
                     "hint":     _sanitize_question(getattr(ex, "hint", "") or ""),
-                    "has_hint": bool(getattr(ex, "hint", "").strip()),
+                    "has_hint": bool((getattr(ex, "hint", None) or "").strip()),
                 }
                 for ex in exos
             ],
