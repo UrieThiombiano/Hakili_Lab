@@ -5,6 +5,7 @@ Fallback automatique sur ReportLab si xelatex est absent.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import tempfile
@@ -87,16 +88,80 @@ _UNICODE_TO_LATEX: dict[str, str] = {
 }
 
 
+def _extract_ascii_math(text: str) -> tuple[str, dict[str, str]]:
+    """Extrait les notations ASCII mathématiques avant l'échappement LaTeX.
+
+    Remplace sqrt(), ^, _, pi, <=, >= par des tokens neutres (alphanum. purs)
+    pour que _le() ne les touche pas. Retourne le texte modifié et la table
+    de substitution {token: commande_latex}.
+    """
+    store: dict[str, str] = {}
+    idx = 0
+
+    def ph(latex: str) -> str:
+        nonlocal idx
+        key = f"XMATHPH{idx}XEND"
+        store[key] = latex
+        idx += 1
+        return key
+
+    # 1. sqrt(expr) → $\sqrt{expr}$  — traiter en premier (peut contenir ^)
+    def _repl_sqrt(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        # Exposants à l'intérieur du sqrt : a^2 → a^{2}
+        inner = re.sub(r'([A-Za-z0-9])\^(\d+)', r'\1^{\2}', inner)
+        return ph(f'$\\sqrt{{{inner}}}$')
+
+    text = re.sub(r'sqrt\(([^)]*)\)', _repl_sqrt, text)
+
+    # 2. (a/b) fractions simples avec entiers → $\frac{a}{b}$
+    text = re.sub(
+        r'\((\d+)/(\d+)\)',
+        lambda m: ph(f'$\\frac{{{m.group(1)}}}{{{m.group(2)}}}$'),
+        text,
+    )
+
+    # 3. base^exp (lettre ou chiffre) → $base^{exp}$
+    text = re.sub(
+        r'([A-Za-z0-9])\^(\d+)',
+        lambda m: ph(f'${m.group(1)}^{{{m.group(2)}}}$'),
+        text,
+    )
+
+    # 4. V_xyz, V_cyl, V_pyr … (majuscule + _ + minuscules) → $V_{\mathrm{xyz}}$
+    text = re.sub(
+        r'\b([A-Z])_([a-z]+)\b',
+        lambda m: ph(f'${m.group(1)}_{{\\mathrm{{{m.group(2)}}}}}$'),
+        text,
+    )
+
+    # 5. pi standalone → $\pi$
+    text = re.sub(r'\bpi\b', lambda _: ph(r'$\pi$'), text)
+
+    # 6. <= et >= textuels (non-Unicode)
+    text = text.replace("<=", ph(r'$\leq$'))
+    text = text.replace(">=", ph(r'$\geq$'))
+    text = text.replace("!=", ph(r'$\neq$'))
+
+    return text, store
+
+
 def _sanitize_question(text: str) -> str:
     """Convertit le texte brut de l'IA en LaTeX valide.
 
-    L'IA génère du texte ordinaire avec des symboles Unicode (ℕ, ℤ, ∈…).
-    On échappe d'abord les caractères spéciaux LaTeX, puis on remplace
-    les symboles mathematiques par des commandes ensuremath.
+    Ordre : extraction des notations ASCII math → échappement LaTeX du texte
+    restant → réinjection des commandes LaTeX → conversion des symboles Unicode.
     """
     if not text:
         return ""
-    escaped = _le(str(text))
+    # Étape 1 : extraire les notations ASCII math avant que _le() n'échappe ^ et _
+    processed, math_store = _extract_ascii_math(str(text))
+    # Étape 2 : échapper les caractères spéciaux LaTeX du texte non-math
+    escaped = _le(processed)
+    # Étape 3 : réinjecter les commandes LaTeX à la place des tokens
+    for key, latex in math_store.items():
+        escaped = escaped.replace(key, latex)
+    # Étape 4 : convertir les symboles Unicode math restants (ℕ, ≤, ×…)
     for sym, latex in _UNICODE_TO_LATEX.items():
         escaped = escaped.replace(sym, latex)
     return escaped
