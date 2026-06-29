@@ -290,14 +290,14 @@ questions_geometriques:
   - id: Q_GEO_11a
     reponse: "FAUX"
     solution: >
-      O est le milieu de [BD], donc OB⃗ + OD⃗ = 0⃗ (vecteurs opposés).
-      OB⃗ + OD⃗ = BD⃗ est faux car OB⃗ + OD⃗ = 0⃗ ≠ BD⃗.
+      O est le milieu de [BD].
+      OB + OD = BD est faux 
 
   - id: Q_GEO_11b
     reponse: "FAUX"
     solution: >
       Les diagonales d'un rectangle ont la même longueur mais des directions différentes
-      comme vecteurs. AC⃗ ≠ BD⃗.
+      comme vecteurs. AC ≠ BD.
 
   - id: Q_GEO_11c
     reponse: "VRAI"
@@ -307,8 +307,8 @@ questions_geometriques:
   - id: Q_GEO_11d
     reponse: "FAUX"
     solution: >
-      O est le milieu de [AC], donc OC⃗ = −OA⃗.
-      AC⃗ = AO⃗ + OC⃗ = −OA⃗ + (−OA⃗) = −2OA⃗ ≠ 2OA⃗.
+      O est le milieu de [AC], donc OC = −OA.
+      AC = AO + OC = −OA + (−OA) = −2OA ≠ 2OA.
 
   - id: Q_GEO_11e
     reponse: "VRAI"
@@ -318,8 +318,8 @@ questions_geometriques:
   - id: Q_GEO_11f
     reponse: "VRAI"
     solution: >
-      AB⃗ + OD⃗ = OC⃗.
-      Vérification avec les coordonnées : AB⃗ + OD⃗ = OC⃗ (vrai dans un rectangle, voir corrigé).
+      AB + OD = OC.
+      Vérification avec les coordonnées : AB + OD = OC (vrai dans un rectangle, voir corrigé).
 
   - id: Q_GEO_11g
     reponse: "VRAI"
@@ -329,9 +329,9 @@ questions_geometriques:
   - id: Q_GEO_11h
     reponse: "VRAI"
     solution: >
-      Par Chasles : AB⃗ + BD⃗ = AD⃗.
-      Et −DA⃗ = AD⃗ (vecteur opposé).
-      Donc AB⃗ + BD⃗ = −DA⃗. ✓
+      Par Chasles : AB + BD = AD.
+      Et −DA = AD (vecteur opposé).
+      Donc AB + BD = −DA. ✓
 
   - id: Q_GEO_12a
     reponse: "cos x = 3/5"

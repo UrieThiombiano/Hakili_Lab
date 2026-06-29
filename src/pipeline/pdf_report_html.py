@@ -130,28 +130,54 @@ def _clean(s: str) -> str:
     return _safe_text(_humanize_ids_in_text(s))
 
 
-# ── Conversion notation puissances (x^2 → <sup>2</sup>) ───────────────────────
-# Gère trois formes :
-#   x^{n+m}  → accolades LaTeX
-#   x^(n+m)  → parenthèses (sortie Mistral / DeepSeek fréquente)
-#   x^2      → exposant simple alphanumérique
+# ── Conversion notation mathématique ASCII → HTML ─────────────────────────────
+# Formes gérées :
+#   sqrt(expr)  → √expr  ou  √(expr) si composé
+#   (a/b)       → fraction HTML  <sup>a</sup>⁄<sub>b</sub>
+#   pi          → π
+#   x^2         → x<sup>2</sup>   (trois formes : ^2, ^{n+m}, ^(n+m))
 
-_SUP = re.compile(r'\^(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9][A-Za-z0-9]*)')
+_SUP  = re.compile(r'\^(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9][A-Za-z0-9]*)')
+_SQRT = re.compile(r'sqrt\(((?:[^()]*|\([^()]*\))*)\)', re.IGNORECASE)
+_FRAC = re.compile(r'\((\d+)/(\d+)\)')
 
 
 def _math_to_html(s: str) -> str:
-    """Convertit x^2, x^{n+1}, x^(n+1) en <sup>2</sup>, <sup>n+1</sup>."""
-    def _repl(m: re.Match) -> str:
+    """Convertit les notations mathématiques ASCII en HTML lisible."""
+    s = re.sub(r'(?<=[A-Za-z0-9])\*(?=[A-Za-z0-9])', '×', s)
+
+    def _sup_repl(m: re.Match) -> str:
         inner = m.group(1)
         if (inner.startswith('{') and inner.endswith('}')) or \
            (inner.startswith('(') and inner.endswith(')')):
             inner = inner[1:-1]
-        # * dans les exposants → × (notation mathématique française)
         inner = inner.replace('*', '×')
         return f'<sup>{inner}</sup>'
-    # Remplacer aussi * isolé entre chiffres/lettres par × avant traitement
-    s = re.sub(r'(?<=[A-Za-z0-9])\*(?=[A-Za-z0-9])', '×', s)
-    return _SUP.sub(_repl, s)
+
+    # 1. sqrt(expr) → √expr  ou  √(expr) si l'expression est composée
+    def _repl_sqrt(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        inner = re.sub(r'(?<=[A-Za-z0-9])\*(?=[A-Za-z0-9])', '×', inner)
+        inner = _SUP.sub(_sup_repl, inner)
+        if re.match(r'^[A-Za-z0-9]+$', inner):
+            return f'√{inner}'
+        return f'√({inner})'
+
+    s = _SQRT.sub(_repl_sqrt, s)
+
+    # 2. (a/b) fractions entières → fraction HTML
+    s = _FRAC.sub(
+        lambda m: f'<sup>{m.group(1)}</sup>&frasl;<sub>{m.group(2)}</sub>',
+        s,
+    )
+
+    # 3. pi isolé → π
+    s = re.sub(r'\bpi\b', 'π', s)
+
+    # 4. Exposants x^2, x^{n+1}, x^(n+1) → <sup>…</sup>
+    s = _SUP.sub(_sup_repl, s)
+
+    return s
 
 
 def _cm(s: str) -> str:
