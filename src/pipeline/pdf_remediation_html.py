@@ -4,6 +4,7 @@ Génération PDF feuille de remédiation via xhtml2pdf (HTML+CSS → PDF, pur Py
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,55 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
+
+# ── Découpage des questions en énoncé + tâches numérotées ────────────────────
+
+# Séparation sur ". " suivi d'une majuscule (ponctuation de fin de phrase)
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÁÉÈÊËÀÂÙÛÎÏÙÛÜ])')
+
+# Verbes d'action français (infinitif) qui introduisent une tâche
+_TASK_VERBS = re.compile(
+    r'^(Puis\s+|Ensuite[\s,]+)?(Calculer|Simplifier|R[eé]soudre|Identifier|'
+    r'Pr[eé]senter|V[eé]rifier|[EÉé]crire|Montrer|Factoriser|D[eé]composer|'
+    r'D[eé]velopper|Trouver|Poser|Exprimer|Justifier|Repr[eé]senter|'
+    r'D[eé]terminer|Comparer|Classer|Lister|Conclure|Indiquer|Expliquer|'
+    r'D[eé]montrer|Appliquer|D[eé]duire|Utiliser|Dresser|Effectuer|'
+    r'R[eé]duire|Donner|Mod[eé]liser|Construire|Tracer|[EÉ]valuer|'
+    r'Prouver|[EÉ]tablir|Partager|D[eé]finir|Repr[eé]senter|Calculez|'
+    r'Résolvez|Vérifiez|Montrez|Trouvez)\b',
+    re.IGNORECASE,
+)
+
+
+def _split_question(text: str) -> tuple[str, list[str]]:
+    """
+    Découpe le texte d'un exercice en (énoncé_contexte, [tâche1, tâche2, …]).
+
+    Les phrases débutant par un verbe d'action → tâches numérotées.
+    Les phrases contextuelles (ex: "Un père a 3 fois…") → énoncé.
+    Si aucun verbe d'action détecté, première phrase = énoncé, reste = tâches.
+    """
+    sentences = [s.strip() for s in _SENT_SPLIT.split(text.strip()) if s.strip()]
+    if len(sentences) <= 1:
+        return text.strip(), []
+
+    enonce_parts: list[str] = []
+    tasks: list[str] = []
+
+    for sent in sentences:
+        if _TASK_VERBS.match(sent):
+            tasks.append(sent)
+        elif tasks:
+            # Phrase non-tâche après des tâches → rattacher à la dernière tâche
+            tasks[-1] = tasks[-1].rstrip('.') + '. ' + sent
+        else:
+            enonce_parts.append(sent)
+
+    if not tasks:
+        # Aucun verbe d'action → première phrase = énoncé, reste = tâches
+        return enonce_parts[0], enonce_parts[1:]
+
+    return ' '.join(enonce_parts), tasks
 
 _MONTHS_FR = [
     "", "janvier", "février", "mars", "avril", "mai", "juin",
@@ -57,18 +107,21 @@ def _build_context(
     series = []
     for idx, topic in enumerate(topics_seen, 1):
         exos = topic_exos[topic]
+        exercises_ctx = []
+        for ex in exos:
+            enonce_raw, tasks_raw = _split_question(str(ex.question))
+            exercises_ctx.append({
+                "number":    ex.number,
+                "enonce":    _cm(enonce_raw),
+                "tasks":     [_cm(t) for t in tasks_raw],
+                "has_tasks": bool(tasks_raw),
+                "hint":      _cm(getattr(ex, "hint", "") or ""),
+                "has_hint":  bool((getattr(ex, "hint", "") or "").strip()),
+            })
         series.append({
-            "idx": idx,
-            "topic": _cm(topic),
-            "exercises": [
-                {
-                    "number":   ex.number,
-                    "question": _cm(ex.question),
-                    "hint":     _cm(getattr(ex, "hint", "") or ""),
-                    "has_hint": bool((getattr(ex, "hint", "") or "").strip()),
-                }
-                for ex in exos
-            ],
+            "idx":       idx,
+            "topic":     _cm(topic),
+            "exercises": exercises_ctx,
         })
 
     is_enrichment = getattr(remediation_subject, "is_enrichment", False)
