@@ -25,7 +25,7 @@ Produire **5 exercices par difficulté identifiée dans `weaknesses`**, ciblant 
 - Chaque exercice exige une rédaction complète avec étapes numérotées
 - Les exercices 3, 4 et 5 n'ont PAS d'indice guidé — l'élève doit identifier la méthode seul
 - Les énoncés intègrent un contexte (géométrique, algébrique, numérique) précis
-- Utilise la notation ASCII pour les mathématiques : N, Z, Q, R (pas ℕ,ℤ,ℚ,ℝ), a^n (pas aⁿ), a×b (pas a·b)
+- Utilise la notation ASCII pour les **symboles mathématiques uniquement** : N, Z, Q, R (pas ℕ,ℤ,ℚ,ℝ), a^n (pas aⁿ), a×b (pas a·b). Cette contrainte ne s'applique qu'aux symboles ensemblistes/exposants — **tout le texte en français doit impérativement garder ses accents** (é, è, à, ê, ù, ç, ô, î…), y compris dans `topic`, `question` et `hint`.
 
 ## Exemples de séries au bon niveau
 
@@ -64,62 +64,62 @@ Exemple pour 2 faiblesses — `weaknesses[0]` = "Règle d'inversion du sens dans
   "exercises": [
     {
       "number": 1,
-      "topic": "Regle d'inversion du sens dans les inequations",
-      "question": "Resoudre -3x > 12. Presenter les etapes et justifier l'inversion du sens.",
-      "hint": "Diviser par un nombre negatif inverse le sens de l'inegalite."
+      "topic": "Règle d'inversion du sens dans les inéquations",
+      "question": "Résoudre -3x > 12. Présenter les étapes et justifier l'inversion du sens.",
+      "hint": "Diviser par un nombre négatif inverse le sens de l'inégalité."
     },
     {
       "number": 2,
-      "topic": "Regle d'inversion du sens dans les inequations",
-      "question": "Resoudre 5 - 2x >= 11. Developper puis isoler x.",
+      "topic": "Règle d'inversion du sens dans les inéquations",
+      "question": "Résoudre 5 - 2x >= 11. Développer puis isoler x.",
       "hint": "Transposer les constantes avant de diviser."
     },
     {
       "number": 3,
-      "topic": "Regle d'inversion du sens dans les inequations",
-      "question": "Resoudre l'inequation 3(1 - 2x) < 2x + 9 et representer la solution sur une droite graduee.",
+      "topic": "Règle d'inversion du sens dans les inéquations",
+      "question": "Résoudre l'inéquation 3(1 - 2x) < 2x + 9 et représenter la solution sur une droite graduée.",
       "hint": null
     },
     {
       "number": 4,
-      "topic": "Regle d'inversion du sens dans les inequations",
-      "question": "Trouver les valeurs entieres de x verifiant simultanement -2x + 1 > -5 et x - 3 < 2.",
+      "topic": "Règle d'inversion du sens dans les inéquations",
+      "question": "Trouver les valeurs entières de x vérifiant simultanément -2x + 1 > -5 et x - 3 < 2.",
       "hint": null
     },
     {
       "number": 5,
-      "topic": "Regle d'inversion du sens dans les inequations",
-      "question": "Resoudre (2x - 1)/(-3) <= (x + 4)/2 dans R. Mettre au meme denominateur et conclure.",
+      "topic": "Règle d'inversion du sens dans les inéquations",
+      "question": "Résoudre (2x - 1)/(-3) <= (x + 4)/2 dans R. Mettre au même dénominateur et conclure.",
       "hint": null
     },
     {
       "number": 6,
-      "topic": "Addition de nombres relatifs de signes differents",
-      "question": "Calculer (-15) + (+8). Identifier le terme dominant, calculer la difference des valeurs absolues, attribuer le signe.",
-      "hint": "Signes differents : soustraire les valeurs absolues et garder le signe du terme dominant."
+      "topic": "Addition de nombres relatifs de signes différents",
+      "question": "Calculer (-15) + (+8). Identifier le terme dominant, calculer la différence des valeurs absolues, attribuer le signe.",
+      "hint": "Signes différents : soustraire les valeurs absolues et garder le signe du terme dominant."
     },
     {
       "number": 7,
-      "topic": "Addition de nombres relatifs de signes differents",
-      "question": "Calculer A = (-47) + (+23) + (-8) + (+31). Regrouper d'abord les positifs et les negatifs.",
-      "hint": "Sommer separement les positifs puis les negatifs, puis additionner les deux resultats."
+      "topic": "Addition de nombres relatifs de signes différents",
+      "question": "Calculer A = (-47) + (+23) + (-8) + (+31). Regrouper d'abord les positifs et les négatifs.",
+      "hint": "Sommer séparément les positifs puis les négatifs, puis additionner les deux résultats."
     },
     {
       "number": 8,
-      "topic": "Addition de nombres relatifs de signes differents",
-      "question": "Simplifier B = -3 + 7 - 12 + 4 - 1. Montrer les etapes de regroupement.",
+      "topic": "Addition de nombres relatifs de signes différents",
+      "question": "Simplifier B = -3 + 7 - 12 + 4 - 1. Montrer les étapes de regroupement.",
       "hint": null
     },
     {
       "number": 9,
-      "topic": "Addition de nombres relatifs de signes differents",
-      "question": "x est un entier relatif. On sait que x + (-14) = -5. Trouver x et verifier.",
+      "topic": "Addition de nombres relatifs de signes différents",
+      "question": "x est un entier relatif. On sait que x + (-14) = -5. Trouver x et vérifier.",
       "hint": null
     },
     {
       "number": 10,
-      "topic": "Addition de nombres relatifs de signes differents",
-      "question": "La temperature a midi est -3 degres C. Elle monte de 8 degres l'apres-midi puis descend de 11 degres la nuit. Calculer la temperature finale. Modeliser par une addition de relatifs.",
+      "topic": "Addition de nombres relatifs de signes différents",
+      "question": "La température à midi est -3 degrés C. Elle monte de 8 degrés l'après-midi puis descend de 11 degrés la nuit. Calculer la température finale. Modéliser par une addition de relatifs.",
       "hint": null
     }
   ]
@@ -136,3 +136,4 @@ Exemple pour 2 faiblesses — `weaknesses[0]` = "Règle d'inversion du sens dans
 - Multiplication : symbole `×` uniquement — JAMAIS `*` dans les énoncés
 - Ensembles : N, Z, Q, R (pas ℕ, ℤ, ℚ, ℝ), racines : sqrt(x)
 - Exactement **5 exercices par entrée de `weaknesses`** : si N faiblesse(s), N×5 exercices au total
+- **Accents obligatoires** : ces règles ASCII concernent uniquement les symboles mathématiques ci-dessus — le français courant (`topic`, `question`, `hint`) doit toujours conserver ses accents normaux
