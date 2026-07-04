@@ -152,10 +152,22 @@ _SUP  = re.compile(r'\^(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9][A-Za-z0-9]*)')
 _SQRT = re.compile(r'sqrt\(((?:[^()]*|\([^()]*\))*)\)', re.IGNORECASE)
 _FRAC = re.compile(r'\((\d+)/(\d+)\)')
 
+# Exposants écrits sans caret par l'IA malgré la consigne "a^n" -- l'IA écrit parfois
+# "cm2"/"R2" au lieu de "cm^2"/"R^2". Ces deux familles sont sans ambiguïté dans ce
+# domaine (unités d'aire/volume, rayon/diamètre au carré) contrairement à un exposant
+# générique sur une lettre isolée (ex: u2 pourrait être un indice de suite u_n).
+_UNIT_POW = re.compile(r'\b([cdk]?m)(2|3)\b')
+_GEOM_POW = re.compile(r'\b(Rayon|rayon|Diam[eè]tre|diam[eè]tre|R|D)(2|3)\b')
+_SUP_DIGIT = {"2": "²", "3": "³"}
+
 
 def _math_to_html(s: str) -> str:
     """Convertit les notations mathématiques ASCII en HTML lisible."""
     s = re.sub(r'(?<=[A-Za-z0-9])\*(?=[A-Za-z0-9])', '×', s)
+
+    # 0. Exposants sans caret sur unités/rayon/diamètre → notation en exposant
+    s = _UNIT_POW.sub(lambda m: m.group(1) + _SUP_DIGIT[m.group(2)], s)
+    s = _GEOM_POW.sub(lambda m: m.group(1) + _SUP_DIGIT[m.group(2)], s)
 
     def _sup_repl(m: re.Match) -> str:
         inner = m.group(1)
@@ -194,6 +206,58 @@ def _math_to_html(s: str) -> str:
 def _cm(s: str) -> str:
     """_clean + _math_to_html, marqué Markup (HTML sûr pour Jinja2 autoescape)."""
     return Markup(_math_to_html(_clean(s)))
+
+
+# ── Mise en forme des textes IA denses (diagnostic, remédiation) ──────────────
+# Les textes générés par l'IA (causes cachées, plans de remédiation) sont de longs
+# paragraphes bruts. Sans découpage, ils s'affichent comme un bloc unique illisible.
+
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ])')
+
+# Étape numérotée inline ("... : 1) ... ; 2) ... ; 3) ...") -- uniquement reconnue
+# quand le marqueur "N)" est précédé d'un ':' ou ';' pour éviter les faux positifs
+# du type "(Geo. 4)" (référence de question entre parenthèses).
+_STEP_SPLIT = re.compile(r'(?<=[:;])\s*(\d+)\)\s+')
+
+
+def _split_steps(text: str) -> tuple[str, list[str]]:
+    """Détecte une liste numérotée inline et la sépare en (intro, [étapes]).
+    Retourne (text, []) si aucune séquence 1, 2, 3, … n'est détectée."""
+    matches = list(_STEP_SPLIT.finditer(text))
+    nums = [int(m.group(1)) for m in matches]
+    if len(nums) < 2 or nums != list(range(1, len(nums) + 1)):
+        return text, []
+    intro = text[: matches[0].start()].rstrip()
+    steps: list[str] = []
+    for i, m in enumerate(matches):
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        steps.append(text[start:end].strip().rstrip(";").strip())
+    return intro, steps
+
+
+def _paragraphs(s: str) -> Markup:
+    """Découpe un texte dense en paragraphes suivant la ponctuation de fin de phrase."""
+    cleaned = _clean(s)
+    sentences = [p.strip() for p in _SENT_SPLIT.split(cleaned) if p.strip()]
+    if len(sentences) <= 1:
+        return Markup(_math_to_html(cleaned))
+    return Markup("".join(f"<p>{_math_to_html(p)}</p>" for p in sentences))
+
+
+def _action_html(s: str) -> Markup:
+    """Rend un plan d'action : liste numérotée <ol> si détectée, sinon paragraphes."""
+    cleaned = _clean(s)
+    intro, steps = _split_steps(cleaned)
+    if not steps:
+        return _paragraphs(s)
+    parts = []
+    if intro.strip():
+        parts.append(f"<p>{_math_to_html(intro.strip())}</p>")
+    parts.append("<ol class='step-list'>")
+    parts.extend(f"<li>{_math_to_html(step)}</li>" for step in steps)
+    parts.append("</ol>")
+    return Markup("".join(parts))
 
 
 def _display_id(rid: str) -> str:
@@ -277,8 +341,8 @@ def _build_context(
     if diagnostic and diagnostic.root_causes:
         for rc in diagnostic.root_causes:
             root_causes.append({
-                "visible": _cm(rc.visible_error),
-                "hidden":  _cm(rc.hidden_cause),
+                "visible": _paragraphs(rc.visible_error),
+                "hidden":  _paragraphs(rc.hidden_cause),
                 "qs":      ", ".join(_display_id(q) for q in rc.linked_questions) or "--",
             })
 
@@ -288,7 +352,7 @@ def _build_context(
             remediation.append({
                 "priority": item.priority,
                 "topic":    _cm(item.topic),
-                "action":   _cm(item.action),
+                "action":   _action_html(item.action),
             })
 
     is_perfect = (final_score_20 or 0) >= 20.0

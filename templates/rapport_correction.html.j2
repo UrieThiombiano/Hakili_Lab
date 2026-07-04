@@ -74,8 +74,8 @@
 
     /* ===== SCORE HERO ===== */
     .score-box {
-      background-color: #F4F6F7;
-      border: 0.8pt solid #ccc;
+      background-color: #EAF2FF;
+      border: 0.8pt solid #AED6F1;
       padding: 10pt;
       margin-bottom: 16pt;
     }
@@ -88,8 +88,8 @@
 
     /* ===== BARRE DE STATISTIQUES ===== */
     .stat-bar {
-      background-color: #EBF5FB;
-      border: 0.5pt solid #AED6F1;
+      background-color: #EAF2FF;
+      border-left: 3pt solid #2E86C1;
       padding: 7pt 12pt;
       margin-bottom: 12pt;
       font-size: 9pt;
@@ -180,20 +180,24 @@
     .switem { font-size: 9pt; padding: 3pt 0 3pt 8pt; }
 
     .root-box {
-      border: 0.5pt solid #d0d0d0;
+      border: 0.5pt solid #BFD9EA;
       margin-bottom: 10pt;
       page-break-inside: avoid;
     }
     .root-head {
-      background-color: #F4F6F7;
-      border-bottom: 0.5pt solid #ccc;
+      background-color: #D6EAF8;
+      border-bottom: 0.5pt solid #AED6F1;
       padding: 5pt 10pt;
       font-size: 8.5pt;
       font-weight: bold;
       color: #1A5276;
     }
     .root-body { padding: 8pt 10pt; }
-    .root-cause { font-size: 9pt; color: #C0392B; margin-bottom: 5pt; }
+    .root-head p { margin: 0 0 3pt 0; }
+    .root-head p:last-child { margin-bottom: 0; }
+    .root-cause { font-size: 9pt; color: #1a1a1a; margin-bottom: 5pt; }
+    .root-cause p { margin: 0 0 5pt 0; }
+    .root-cause p:last-child { margin-bottom: 0; }
     .root-qs { font-size: 8pt; color: #5D6D7E; font-family: Courier, monospace; }
 
     .remed-item {
@@ -205,6 +209,11 @@
     }
     .remed-title { font-weight: bold; color: #1A5276; font-size: 9.5pt; }
     .remed-action { font-size: 9pt; color: #333; margin-top: 5pt; }
+    .remed-action p { margin: 0 0 5pt 0; }
+    .remed-action p:last-child { margin-bottom: 0; }
+    .step-list { margin: 3pt 0 0 14pt; padding: 0; }
+    .step-list li { margin-bottom: 4pt; }
+    .step-list li:last-child { margin-bottom: 0; }
 
     .doc-footer {
       margin-top: 28pt;
@@ -281,13 +290,9 @@
 
 <!-- Tableau bonnes réponses -->
 {% if good_questions %}
+<div class="sec-head" style="border-color:#1E8449; color:#1E8449; margin-top:0;">&#10003;&nbsp;&nbsp;Bonnes réponses</div>
 <table class="sum">
   <thead>
-    <tr>
-      <th colspan="3" style="background-color:#145A32; text-align:center; font-size:8.5pt;">
-        &#10003;&nbsp;&nbsp;BONNES RÉPONSES
-      </th>
-    </tr>
     <tr>
       <th style="width:40%;">Question</th>
       <th style="width:35%;">Points obtenus</th>
@@ -308,13 +313,9 @@
 
 <!-- Tableau mauvaises réponses -->
 {% if bad_questions %}
+<div class="sec-head" style="border-color:#C0392B; color:#C0392B;">&#10007;&nbsp;&nbsp;Mauvaises réponses</div>
 <table class="sum">
   <thead>
-    <tr>
-      <th colspan="3" style="background-color:#922B21; text-align:center; font-size:8.5pt;">
-        &#10007;&nbsp;&nbsp;MAUVAISES RÉPONSES
-      </th>
-    </tr>
     <tr>
       <th style="width:40%;">Question</th>
       <th style="width:35%;">Points obtenus</th>
