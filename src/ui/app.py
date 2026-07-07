@@ -17,6 +17,12 @@ logging.basicConfig(
 
 import streamlit as st
 
+from src.pipeline.math_format import (
+    ascii_math_upgrade,
+    humanize_ids_in_text,
+    math_to_html,
+)
+
 st.set_page_config(
     page_title="Hakili Lab — Correction IA",
     layout="wide",
@@ -456,8 +462,7 @@ def _mh(s: str) -> str:
     échappement HTML inclus. Pour les st.markdown(unsafe_allow_html=True).
     Contrairement au PDF, aucune dégradation de police : le navigateur rend
     nativement ∈, ⊂, ², √ — les symboles Unicode restent intacts."""
-    from src.pipeline.pdf_report_html import _humanize_ids_in_text, _math_to_html
-    return _math_to_html(_ui_clean(_humanize_ids_in_text(str(s))))
+    return math_to_html(_ui_clean(humanize_ids_in_text(str(s))))
 
 
 # Exposants Unicode pour les contextes texte pur (labels d'expander, captions)
@@ -468,8 +473,7 @@ def _mt(s: str) -> str:
     """Notation math TEXTE PUR (sans balises HTML) pour les labels d'expander
     et captions Streamlit, où le HTML s'afficherait littéralement :
     <= → ≤, => → →, ^2 → ², ^(3-5) → ³⁻⁵."""
-    from src.pipeline.pdf_report_html import _ascii_math_upgrade, _humanize_ids_in_text
-    t = _ui_clean(_humanize_ids_in_text(_ascii_math_upgrade(str(s))))
+    t = _ui_clean(humanize_ids_in_text(ascii_math_upgrade(str(s))))
     return re.sub(
         r"\^\(?([0-9n+-]{1,3})\)?",
         lambda m: m.group(1).translate(_SUP_TRANS),
