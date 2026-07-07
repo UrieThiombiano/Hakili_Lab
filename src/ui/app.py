@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -451,9 +452,72 @@ def _ui_clean(s: str) -> str:
 
 
 def _mh(s: str) -> str:
-    """Convertit x^2 → <sup>2</sup>, nettoie les symboles et humanise les IDs."""
+    """Notation math HTML : x^2 → <sup>2</sup>, 7/12 → fraction, <= → ≤,
+    échappement HTML inclus. Pour les st.markdown(unsafe_allow_html=True).
+    Contrairement au PDF, aucune dégradation de police : le navigateur rend
+    nativement ∈, ⊂, ², √ — les symboles Unicode restent intacts."""
     from src.pipeline.pdf_report_html import _humanize_ids_in_text, _math_to_html
     return _math_to_html(_ui_clean(_humanize_ids_in_text(str(s))))
+
+
+# Exposants Unicode pour les contextes texte pur (labels d'expander, captions)
+_SUP_TRANS = str.maketrans("0123456789n+-", "⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻")
+
+
+def _mt(s: str) -> str:
+    """Notation math TEXTE PUR (sans balises HTML) pour les labels d'expander
+    et captions Streamlit, où le HTML s'afficherait littéralement :
+    <= → ≤, => → →, ^2 → ², ^(3-5) → ³⁻⁵."""
+    from src.pipeline.pdf_report_html import _ascii_math_upgrade, _humanize_ids_in_text
+    t = _ui_clean(_humanize_ids_in_text(_ascii_math_upgrade(str(s))))
+    return re.sub(
+        r"\^\(?([0-9n+-]{1,3})\)?",
+        lambda m: m.group(1).translate(_SUP_TRANS),
+        t,
+    )
+
+
+# ── Prévisualisation PDF ──────────────────────────────────────────────────────
+# Rendu des pages en PNG via PyMuPDF (déjà dépendance de l'ingestion) :
+# 100 % fiable dans Streamlit, contrairement aux <iframe> data: que Chrome
+# bloque selon les versions. Cache par (chemin, mtime) — un PDF régénéré
+# (ex. après validation enseignant) invalide automatiquement son aperçu.
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def _pdf_pages_png(pdf_path_str: str, mtime: float, zoom: float = 1.6) -> list[bytes]:
+    import fitz  # PyMuPDF
+    doc = fitz.open(pdf_path_str)
+    try:
+        mat = fitz.Matrix(zoom, zoom)
+        return [page.get_pixmap(matrix=mat).tobytes("png") for page in doc]
+    finally:
+        doc.close()
+
+
+def _pdf_preview_pages(pdf_path) -> None:
+    """Affiche chaque page du PDF en image (corps de l'aperçu)."""
+    try:
+        pages = _pdf_pages_png(str(pdf_path), pdf_path.stat().st_mtime)
+    except Exception as exc:  # PDF corrompu / supprimé entre-temps
+        st.warning(f"Aperçu indisponible : {exc}")
+        return
+    n = len(pages)
+    for i, png in enumerate(pages, 1):
+        st.image(png, caption=f"Page {i} / {n}", width="stretch")
+
+
+def _pdf_preview_expander(pdf_path, key: str, nested: bool = False) -> None:
+    """Aperçu du PDF avant téléchargement.
+
+    nested=True : rendu via st.toggle (les expanders ne peuvent pas être
+    imbriqués dans Streamlit — cas des résultats batch, déjà dans un
+    expander par élève)."""
+    if nested:
+        if st.toggle("👁 Aperçu", key=f"toggle_{key}"):
+            _pdf_preview_pages(pdf_path)
+    else:
+        with st.expander("👁 Aperçu avant téléchargement"):
+            _pdf_preview_pages(pdf_path)
 
 
 def _render_diag_overview(diag) -> str:
@@ -546,8 +610,8 @@ def render_validation_table(grade, rubric=None) -> None:
         st.markdown(
             f'<div class="val-row {row_class}">'
             f'<span style="font-weight:600;color:#001e4a;">{q.rubric_item_id}</span>'
-            f'<span style="color:#2c5f2e;">{correct_display}</span>'
-            f'<span style="{ans_color}">{q.observed_answer}{review_tag}</span>'
+            f'<span style="color:#2c5f2e;">{_mh(correct_display)}</span>'
+            f'<span style="{ans_color}">{_mh(q.observed_answer)}{review_tag}</span>'
             f'<span style="font-weight:600;">{"🟢" if q.score > 0 else "🔴"} {ia_note}</span>'
             f'<span></span>'
             '</div>',
@@ -681,7 +745,7 @@ def _display_results(result, key_prefix: str = "") -> None:
             )
             for rc in diag.root_causes:
                 qs = ", ".join(rc.linked_questions) if rc.linked_questions else "—"
-                with st.expander(f"Questions {qs} — {rc.visible_error}"):
+                with st.expander(f"Questions {qs} — {_mt(rc.visible_error)}"):
                     st.markdown(f"**Cause cachée :** {_mh(rc.hidden_cause)}", unsafe_allow_html=True)
 
         if diag.skills:
@@ -703,7 +767,7 @@ def _display_results(result, key_prefix: str = "") -> None:
                         g = _gap_index.get(cid)
                         refs.append(f"{g.classe} — {g.chapitre}" if g else cid)
                     prog_info = "  ·  " + " / ".join(refs)
-                with st.expander(f"{lbl}  —  {sk.name}{prog_info}"):
+                with st.expander(f"{lbl}  —  {_mt(sk.name)}{prog_info}"):
                     st.markdown(_mh(sk.evidence), unsafe_allow_html=True)
                     if sk.level in ("non_acquis", "part_acquis") and sk.chunk_ids:
                         for cid in sk.chunk_ids:
@@ -727,11 +791,11 @@ def _display_results(result, key_prefix: str = "") -> None:
                     if gap.savoir_faire:
                         st.markdown("**Savoir-faire à retravailler :**")
                         for sf in gap.savoir_faire:
-                            st.markdown(f"- {sf}")
+                            st.markdown(f"- {_mh(sf)}", unsafe_allow_html=True)
                     if gap.erreurs_frequentes:
                         st.markdown("**Erreurs fréquentes associées :**")
                         for ef in gap.erreurs_frequentes:
-                            st.caption(f"⚠ {ef}")
+                            st.caption(f"⚠ {_mt(ef)}")
 
         if diag.remediation_plan:
             st.markdown("#### Comment aider votre enfant à progresser")
@@ -745,9 +809,17 @@ def _display_results(result, key_prefix: str = "") -> None:
         for ex in result.remediation_subject.exercises:
             if ex.topic != current_topic:
                 current_topic = ex.topic
-                st.markdown(f"**Série : {_mh(ex.topic)}**", unsafe_allow_html=True)
+                from src.pipeline.pdf_remediation_html import _series_title
+                st.markdown(f"**Série : {_mh(_series_title(ex.topic))}**", unsafe_allow_html=True)
             with st.expander(f"Exercice {ex.number}"):
-                st.markdown(_mh(ex.question), unsafe_allow_html=True)
+                # Même découpage positionnel que le PDF : une seule numérotation,
+                # jamais les marqueurs bruts du LLM ("(1)…" mêlé à "1.…")
+                from src.pipeline.pdf_remediation_html import _split_question
+                _enonce, _tasks = _split_question(str(ex.question))
+                _q_html = f"<p>{_mh(_enonce)}</p>" if _enonce else ""
+                if _tasks:
+                    _q_html += "<ol>" + "".join(f"<li>{_mh(t)}</li>" for t in _tasks) + "</ol>"
+                st.markdown(_q_html or _mh(ex.question), unsafe_allow_html=True)
                 if ex.hint:
                     st.markdown(f'<span style="font-size:11px;color:#7090b8;">Aide : {_mh(ex.hint)}</span>', unsafe_allow_html=True)
 
@@ -769,6 +841,7 @@ def _display_results(result, key_prefix: str = "") -> None:
                 key=f"dl_pdf_{kid}",
                 use_container_width=True,
             )
+            _pdf_preview_expander(result.pdf_path, key=f"prev_pdf_{kid}")
     with col_dl2:
         if result.remediation_pdf_path and result.remediation_pdf_path.exists():
             st.download_button(
@@ -779,6 +852,7 @@ def _display_results(result, key_prefix: str = "") -> None:
                 key=f"dl_rem_{kid}",
                 use_container_width=True,
             )
+            _pdf_preview_expander(result.remediation_pdf_path, key=f"prev_rem_{kid}")
         elif not (result.remediation_subject and result.remediation_subject.exercises):
             st.caption("Exercices de progression non disponibles pour cette copie")
 
@@ -1389,6 +1463,7 @@ elif page == "TRAITEMENT BATCH":
                                 key=f"batch_pdf_{r.copy_id}",
                                 use_container_width=True,
                             )
+                            _pdf_preview_expander(r.pdf_path, key=f"batch_prev_pdf_{r.copy_id}", nested=True)
                     with bc2:
                         if r.remediation_pdf_path and r.remediation_pdf_path.exists():
                             st.download_button(
@@ -1399,3 +1474,4 @@ elif page == "TRAITEMENT BATCH":
                                 key=f"batch_rem_{r.copy_id}",
                                 use_container_width=True,
                             )
+                            _pdf_preview_expander(r.remediation_pdf_path, key=f"batch_prev_rem_{r.copy_id}", nested=True)

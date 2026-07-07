@@ -15,14 +15,10 @@ _TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 # ── Découpage des questions en énoncé + tâches numérotées ────────────────────
 
+from src.pipeline.text_structuring import split_numbered_items
+
 # Séparation sur ". " suivi d'une majuscule (ponctuation de fin de phrase)
 _SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÁÉÈÊËÀÂÙÛÎÏÙÛÜ])')
-
-# Sous-questions numérotées : "(1) ... (2) ..." entre parenthèses en ligne, OU
-# "1. ...\n2. ..." avec retours à la ligne (les deux styles sont produits par l'IA
-# selon le provider). Le marqueur ne suit jamais une majuscule (il commence par
-# "(" ou un chiffre en début de ligne), donc _SENT_SPLIT seul ne le détecte jamais.
-_STEP_MARKER = re.compile(r'(?:\A|(?<=[.!?])|(?<=\n))[ \t]*\(?(\d+)[.)]\s+')
 
 # Verbes d'action français (infinitif) qui introduisent une tâche
 _TASK_VERBS = re.compile(
@@ -38,41 +34,24 @@ _TASK_VERBS = re.compile(
 )
 
 
-def _split_by_step_markers(text: str) -> tuple[str, list[str]] | None:
-    """Détecte une séquence numérotée "(1) ... (2) ..." ou "1. ...\n2. ..." et la
-    sépare en (énoncé_intro, [tâche1, tâche2, …]). None si aucune séquence
-    1, 2, 3, … valide n'est trouvée (évite les faux positifs isolés)."""
-    matches = list(_STEP_MARKER.finditer(text))
-    nums = [int(m.group(1)) for m in matches]
-    if len(nums) < 2 or nums != list(range(1, len(nums) + 1)):
-        return None
-    intro = text[: matches[0].start()].strip()
-    tasks: list[str] = []
-    for i, m in enumerate(matches):
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        tasks.append(text[start:end].strip())
-    return intro, tasks
-
-
 def _split_question(text: str) -> tuple[str, list[str]]:
     """
     Découpe le texte d'un exercice en (énoncé_contexte, [tâche1, tâche2, …]).
 
-    Priorité 1 : séquence numérotée "(1) ... (2) ..." ou "1. ...\\n2. ..." (styles dominants).
+    Priorité 1 : marqueurs de numérotation ("(1)", "2.", "3)") traités comme
+    des frontières positionnelles par split_numbered_items — les numéros émis
+    par le LLM sont ignorés, la numérotation visible est régénérée par le
+    template. L'énoncé peut être vide si le texte démarre sur un marqueur
+    (le template n'affiche alors pas de bloc contexte).
     Priorité 2 : phrases débutant par un verbe d'action → tâches numérotées.
     Les phrases contextuelles (ex: "Un père a 3 fois…") → énoncé.
     Si aucun marqueur détecté, première phrase = énoncé, reste = tâches.
     """
     text = text.strip()
 
-    by_markers = _split_by_step_markers(text)
-    if by_markers is not None:
-        intro, tasks = by_markers
-        if intro:
-            return intro, tasks
-        # Pas de contexte avant le marqueur "1" -- le texte démarre directement par la liste
-        return tasks[0], tasks[1:]
+    intro, tasks = split_numbered_items(text)
+    if tasks:
+        return intro, tasks
 
     sentences = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
     if len(sentences) <= 1:
@@ -95,6 +74,37 @@ def _split_question(text: str) -> tuple[str, list[str]]:
         return enonce_parts[0], enonce_parts[1:]
 
     return ' '.join(enonce_parts), tasks
+
+# ── Titre de série élève ──────────────────────────────────────────────────────
+# Les topics sont les libellés `weaknesses` du diagnostic, au format
+# "Compétence : symptôme observé sur la copie — Num. X". Le symptôme et la
+# référence de question sont du vocabulaire de diagnostic destiné à
+# l'enseignant — sur le sujet remis à l'élève, seul l'intitulé de compétence
+# fait un titre de série cohérent.
+
+# Références de questions en fin de libellé : "— Num. 4a", "— Geo. 2, Geo. 4", "— Q_NUM_07"
+_TRAILING_QREFS = re.compile(
+    r"\s*[—–-]\s*(?:(?:Num|G[ée]o)\.\s*\w+|Q_\w+)(?:\s*(?:,|et)\s*(?:(?:Num|G[ée]o)\.\s*\w+|Q_\w+))*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _series_title(topic: str) -> str:
+    """Extrait un titre de série présentable pour l'élève depuis un libellé
+    de faiblesse diagnostic. Ne modifie jamais `topic` lui-même (clé de
+    regroupement des séries et contrat de validation orchestrateur)."""
+    t = _TRAILING_QREFS.sub("", topic.strip())
+    # L'intitulé de compétence est la proposition avant le premier " : "
+    head = t.split(" : ", 1)[0].strip()
+    if len(head) >= 8:
+        t = head
+    t = t.strip(" .;:—–-")
+    if not t:
+        t = topic.strip()
+    if len(t) > 90:
+        t = t[:90].rsplit(" ", 1)[0] + "…"
+    return t[:1].upper() + t[1:] if t else t
+
 
 _MONTHS_FR = [
     "", "janvier", "février", "mars", "avril", "mai", "juin",
@@ -154,7 +164,7 @@ def _build_context(
             })
         series.append({
             "idx":       idx,
-            "topic":     _cm(topic),
+            "topic":     _cm(_series_title(topic)),
             "exercises": exercises_ctx,
         })
 

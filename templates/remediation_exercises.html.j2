@@ -60,8 +60,18 @@
       font-size: 9pt;
     }
 
-    /* ===== SÉRIE (titre encadré, sobre) ===== */
+    /* ===== SÉRIE (titre encadré, sobre) =====
+       Table à une cellule : xhtml2pdf étend correctement la bordure d'une
+       cellule sur plusieurs lignes, contrairement à un div bordé dont le
+       texte long déborde du cadre. */
     .title-box {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 18pt;
+      margin-bottom: 10pt;
+      page-break-inside: avoid;
+    }
+    .title-box td {
       border: 1pt solid #1A5276;
       color: #1A5276;
       font-weight: bold;
@@ -69,9 +79,8 @@
       text-align: center;
       text-transform: uppercase;
       letter-spacing: 0.3pt;
+      line-height: 1.35;
       padding: 6pt 10pt;
-      margin-top: 18pt;
-      margin-bottom: 10pt;
     }
 
     /* ===== EXERCICE ===== */
@@ -197,7 +206,7 @@
 <!-- ── SÉRIES D'EXERCICES ────────────────────────────────────────── -->
 {% for serie in series %}
 
-<div class="title-box">Série {{ serie.idx }} — {{ serie.topic }}</div>
+<table class="title-box"><tr><td>Série {{ serie.idx }} — {{ serie.topic }}</td></tr></table>
 
 {% for ex in serie.exercises %}
 <div class="exo-block">

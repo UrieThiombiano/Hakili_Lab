@@ -78,53 +78,60 @@ _ID_NUM = re.compile(r"^Q_NUM_0*(\d+[a-z]?)$", re.IGNORECASE)
 _ID_GEO = re.compile(r"^Q_GEO_0*(\d+[a-z]?)$", re.IGNORECASE)
 _ID_IN_TEXT = re.compile(r"Q_(?:NUM|GEO)_0*(\d+[a-z]?)", re.IGNORECASE)
 
-# Symboles Unicode non couverts par Arial standard -- remplacement PDF-safe
+# Symboles Unicode hors répertoire WGL4 -- remplacement PDF-safe.
+# WGL4 est le socle commun à TOUTES les polices candidates (Arial, Segoe,
+# Arial Unicode, Liberation, DejaVu) : ≤ ≥ ≠ ≈ ± × ÷ − √ ∞ ° π → ← ≡ et le
+# grec de base y figurent et sont donc CONSERVÉS tels quels (notation maths).
+# Seuls les symboles absents de WGL4 sont remplacés — et en français lisible
+# par un élève, jamais en jargon informatique.
 _MATH_SAFE: dict[str, str] = {
-    # Ensembles de nombres (Letterlike Symbols U+2100-U+214F)
+    # Ensembles de nombres (Letterlike Symbols U+2100-U+214F, hors WGL4)
     "ℕ": "N",  # N (naturels)
     "ℤ": "Z",  # Z (entiers)
     "ℚ": "Q",  # Q (rationnels)
     "ℝ": "R",  # R (reels)
     "ℂ": "C",  # C (complexes)
     "ℙ": "P",  # P (premiers)
-    # Exposants (U+2070-U+209F) -- convertis en notation ^n
-    "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3",
-    "⁴": "^4", "⁵": "^5", "⁶": "^6",
-    "⁷": "^7", "⁸": "^8", "⁹": "^9",
-    "ⁿ": "^n", "⁺": "^+", "⁻": "^-",
     # Vecteurs — flèches combinantes (U+20D0–U+20FF) non rendues par les polices PDF
     "⃗": "",   # COMBINING RIGHT ARROW ABOVE (vecteur AB⃗ → AB)
     "⃖": "",   # COMBINING LEFT ARROW ABOVE
     "⃡": "",   # COMBINING LEFT RIGHT ARROW ABOVE
-    "→": "->", # RIGHT ARROW (→) -- non couvert par Arial standard
-    "←": "<-", # LEFT ARROW
-    "⇒": "=>", # RIGHT DOUBLE ARROW
-    "⇔": "<=>",# LEFT RIGHT DOUBLE ARROW
-    # Operateurs ensemblistes courants
-    "∈": " in ",    # element de
-    "∉": " not in ", # pas element de
-    "⊂": " C ",     # inclus dans
-    "⊆": " C= ",    # inclus ou egal
-    "∪": " U ",     # union
-    "∩": " inter ", # intersection
-    # Divers
-    "∞": "infini",
-    "≠": "=/=",
-    "≤": "<=",
-    "≥": ">=",
-    # Angles et geometrie
-    "∠": "ang.",  # ANGLE ∠
-    "⊥": "_|_",   # PERPENDICULAR ⊥
-    "∥": "//",    # PARALLEL ∥
-    "≡": "equiv", # IDENTICAL TO ≡
+    # Doubles flèches (hors WGL4) — la simple flèche → est dans WGL4
+    "⇒": " → ",
+    "⇔": " équivaut à ",
+    # Operateurs ensemblistes (hors WGL4) — en français élève, pas en ASCII
+    "∈": " appartient à ",
+    "∉": " n'appartient pas à ",
+    "⊂": " inclus dans ",
+    "⊆": " inclus dans ",
+    "∪": " U ",      # union — notation orale "U" standard au collège
+    "∩": " inter ",  # intersection — notation orale standard
+    # Multiplication par point (U+22C5 hors WGL4) → croix du collège
+    "⋅": " × ",
+    # Angles et geometrie (hors WGL4) — vocabulaire français
+    "∠": "angle ",
+    "⊥": " perpendiculaire à ",
+    "∥": " // ",  # notation // écrite en classe
 }
+
+
+# Exposants (U+2070-U+209F) et indices (U+2080-U+2089) Unicode : traités par
+# SÉQUENCE pour que "2⁻²" → "2^-2" et "2²¹" → "2^21" (un seul <sup> au rendu),
+# et non caractère par caractère ("2^-^2").
+_SUPER_MAP = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻", "0123456789n+-")
+_SUBSC_MAP = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+_SUPER_RUN = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹ⁿ⁺⁻]+")
+_SUBSC_RUN = re.compile("[₀₁₂₃₄₅₆₇₈₉]+")
 
 
 def _safe_text(s: str) -> str:
     """Remplace les symboles Unicode que la police PDF ne peut pas rendre."""
+    s = _SUPER_RUN.sub(lambda m: "^" + m.group(0).translate(_SUPER_MAP), s)
+    s = _SUBSC_RUN.sub(lambda m: "_" + m.group(0).translate(_SUBSC_MAP), s)
     for char, repl in _MATH_SAFE.items():
         s = s.replace(char, repl)
-    return s
+    # Les remplacements français (" appartient à ") peuvent doubler les espaces
+    return re.sub(r" {2,}", " ", s)
 
 
 def _humanize_ids_in_text(s: str) -> str:
@@ -142,15 +149,25 @@ def _clean(s: str) -> str:
 
 
 # ── Conversion notation mathématique ASCII → HTML ─────────────────────────────
-# Formes gérées :
-#   sqrt(expr)  → √expr  ou  √(expr) si composé
-#   (a/b)       → fraction HTML  <sup>a</sup>⁄<sub>b</sub>
-#   pi          → π
-#   x^2         → x<sup>2</sup>   (trois formes : ^2, ^{n+m}, ^(n+m))
+# Deux passes :
+#   A. _ascii_math_upgrade : les notations INFORMATIQUES produites par les LLM
+#      malgré les consignes ("<=", ">=", "=>", "->", "**", "!=", "* " espacé,
+#      commandes LaTeX résiduelles) sont promues en symboles mathématiques
+#      WGL4 (≤ ≥ → ≠ × ≈), AVANT échappement HTML — elles contiennent < et >.
+#   B. conversions structurelles (après échappement HTML) :
+#      sqrt(expr) → √expr | (a/b) et a/b → fraction <sup>a</sup>⁄<sub>b</sub>
+#      x^2, x^-2, x^(n+1) → <sup> | u_1, x_A → <sub> | pi → π
 
-_SUP  = re.compile(r'\^(\{[^{}]*\}|\([^()]*\)|[A-Za-z0-9][A-Za-z0-9]*)')
+_SUP  = re.compile(r'\^(\{[^{}]*\}|\([^()]*\)|[+-]?[A-Za-z0-9]+|[+-])')
 _SQRT = re.compile(r'sqrt\(((?:[^()]*|\([^()]*\))*)\)', re.IGNORECASE)
 _FRAC = re.compile(r'\((\d+)/(\d+)\)')
+# Fraction nue "7/12" : 1-3 chiffres / 1-4 chiffres, jamais adjacente à un
+# autre chiffre, un slash, un point ou une virgule (protège les dates
+# "06/07/2026", les couples d'années "2025/2026" et les décimaux).
+_FRAC_BARE = re.compile(r'(?<![\d/.,_])(\d{1,3})/(\d{1,4})(?![\d/])')
+# Indice : lettre isolée + underscore + 1-2 alphanumériques ("u_1", "x_A").
+# La lettre doit être un mot d'une lettre (\b) — "copy_id" ne matche pas.
+_SUB = re.compile(r'\b([A-Za-z])_([A-Za-z0-9]{1,2})\b')
 
 # Exposants écrits sans caret par l'IA malgré la consigne "a^n" -- l'IA écrit parfois
 # "cm2"/"R2" au lieu de "cm^2"/"R^2". Ces deux familles sont sans ambiguïté dans ce
@@ -160,10 +177,51 @@ _UNIT_POW = re.compile(r'\b([cdk]?m)(2|3)\b')
 _GEOM_POW = re.compile(r'\b(Rayon|rayon|Diam[eè]tre|diam[eè]tre|R|D)(2|3)\b')
 _SUP_DIGIT = {"2": "²", "3": "³"}
 
+# Commandes LaTeX résiduelles (défense en profondeur — les prompts imposent
+# l'ASCII mais un provider peut fuiter du LaTeX)
+_LATEX_FRAC = re.compile(r'\\[dt]?frac\{([^{}]+)\}\{([^{}]+)\}')
+_LATEX_SQRT = re.compile(r'\\sqrt\{([^{}]+)\}')
+_LATEX_SIMPLE = [
+    (r'\times', '×'), (r'\cdot', '×'), (r'\div', '÷'), (r'\pi', 'π'),
+    (r'\leq', '≤'), (r'\geq', '≥'), (r'\neq', '≠'),
+    (r'\le', '≤'), (r'\ge', '≥'), (r'\ne', '≠'), (r'\infty', '∞'),
+]
+
+
+def _ascii_math_upgrade(s: str) -> str:
+    """Notations informatiques → symboles mathématiques (avant échappement)."""
+    # LaTeX résiduel → formes ASCII/Unicode gérées en aval
+    s = _LATEX_FRAC.sub(r'(\1/\2)', s)
+    s = _LATEX_SQRT.sub(r'sqrt(\1)', s)
+    for cmd, sym in _LATEX_SIMPLE:
+        s = s.replace(cmd, sym)
+    # Comparaisons et flèches — l'ordre compte : <=> avant <= et =>
+    s = re.sub(r'\s*<=>\s*', ' équivaut à ', s)
+    s = re.sub(r'\s*<=\s*', ' ≤ ', s)
+    s = re.sub(r'\s*>=\s*', ' ≥ ', s)
+    s = re.sub(r'\s*(?:=>|->)\s*', ' → ', s)
+    s = re.sub(r'\s*(?:=/=|!=)\s*', ' ≠ ', s)
+    # Gras markdown résiduel "**texte**" → texte (avant la règle puissance)
+    s = re.sub(r'\*\*([^*\n]{1,80})\*\*', r'\1', s)
+    # Puissance Python "2**3" → "2^3" (rendue en <sup> ensuite)
+    s = s.replace('**', '^')
+    # "~" d'approximation entre deux valeurs → ≈
+    s = re.sub(r'(?<=[\s\d])~(?=\s?\d)', '≈', s)
+    # Multiplication : "*" adjacent ou espacé entre termes → ×
+    s = re.sub(r'(?<=[A-Za-z0-9)])\*(?=[A-Za-z0-9(])', '×', s)
+    s = re.sub(r'(?<=[A-Za-z0-9)])\s+\*\s+(?=[A-Za-z0-9(])', ' × ', s)
+    return s
+
 
 def _math_to_html(s: str) -> str:
-    """Convertit les notations mathématiques ASCII en HTML lisible."""
-    s = re.sub(r'(?<=[A-Za-z0-9])\*(?=[A-Za-z0-9])', '×', s)
+    """Convertit les notations mathématiques en HTML lisible.
+
+    Échappe systématiquement & < > AVANT d'insérer les balises <sup>/<sub> :
+    le résultat est marqué Markup par les appelants, tout caractère HTML
+    brut résiduel du texte LLM casserait le rendu xhtml2pdf.
+    """
+    s = _ascii_math_upgrade(s)
+    s = s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
     # 0. Exposants sans caret sur unités/rayon/diamètre → notation en exposant
     s = _UNIT_POW.sub(lambda m: m.group(1) + _SUP_DIGIT[m.group(2)], s)
@@ -188,17 +246,21 @@ def _math_to_html(s: str) -> str:
 
     s = _SQRT.sub(_repl_sqrt, s)
 
-    # 2. (a/b) fractions entières → fraction HTML
-    s = _FRAC.sub(
-        lambda m: f'<sup>{m.group(1)}</sup>&frasl;<sub>{m.group(2)}</sub>',
-        s,
-    )
-
-    # 3. pi isolé → π
-    s = re.sub(r'\bpi\b', 'π', s)
-
-    # 4. Exposants x^2, x^{n+1}, x^(n+1) → <sup>…</sup>
+    # 2. Exposants x^2, x^-2, x^{n+1}, x^(n+1) → <sup>…</sup>
+    #    (avant les fractions : dans "2^3/2^5", le "3/2" ne doit pas devenir
+    #    une fraction — une fois les <sup> posés, il n'y a plus d'ambiguïté)
     s = _SUP.sub(_sup_repl, s)
+
+    # 3. Fractions : "(a/b)" puis fractions nues "a/b"
+    frac_html = lambda m: f'<sup>{m.group(1)}</sup>&frasl;<sub>{m.group(2)}</sub>'
+    s = _FRAC.sub(frac_html, s)
+    s = _FRAC_BARE.sub(frac_html, s)
+
+    # 4. Indices u_1, x_A → <sub>
+    s = _SUB.sub(r'\1<sub>\2</sub>', s)
+
+    # 5. pi isolé → π
+    s = re.sub(r'\bpi\b', 'π', s)
 
     return s
 
@@ -214,32 +276,33 @@ def _cm(s: str) -> str:
 
 _SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ])')
 
-# Étape numérotée : "... : 1) ... ; 2) ..." en ligne, OU "...:\n1. ...\n2. ..."
-# avec retours à la ligne -- uniquement reconnu quand le marqueur est précédé de
-# ':', ';' ou d'un retour à la ligne, pour éviter les faux positifs du type
-# "(Geo. 4)" (référence de question entre parenthèses, précédée d'un espace).
-_STEP_SPLIT = re.compile(r'(?:(?<=[:;])|(?<=\n))\s*\(?(\d+)[.)]\s+')
+# Le découpage des listes numérotées ("… : 1) … ; 2) …", "…:\n1. …\n2. …",
+# formats hybrides mélangés par les LLM) est centralisé dans
+# text_structuring.split_numbered_items : marqueurs = frontières
+# positionnelles, numéros sources ignorés et supprimés, numérotation
+# régénérée par le template. Les références "(Num. 4)" / "(Geo. 7)" issues
+# de _humanize_ids_in_text sont protégées par la garde anti-référence.
+from src.pipeline.text_structuring import split_numbered_items as _split_steps
 
 
-def _split_steps(text: str) -> tuple[str, list[str]]:
-    """Détecte une liste numérotée inline et la sépare en (intro, [étapes]).
-    Retourne (text, []) si aucune séquence 1, 2, 3, … n'est détectée."""
-    matches = list(_STEP_SPLIT.finditer(text))
-    nums = [int(m.group(1)) for m in matches]
-    if len(nums) < 2 or nums != list(range(1, len(nums) + 1)):
-        return text, []
-    intro = text[: matches[0].start()].rstrip()
-    steps: list[str] = []
-    for i, m in enumerate(matches):
-        start = m.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        steps.append(text[start:end].strip().rstrip(";").strip())
-    return intro, steps
+def _numbered_list_html(intro: str, steps: list[str]) -> Markup:
+    """Rend (intro, items) en <p> + <ol> — l'unique numérotation visible."""
+    parts = []
+    if intro.strip():
+        parts.append(f"<p>{_math_to_html(intro.strip())}</p>")
+    parts.append("<ol class='step-list'>")
+    parts.extend(f"<li>{_math_to_html(step)}</li>" for step in steps)
+    parts.append("</ol>")
+    return Markup("".join(parts))
 
 
 def _paragraphs(s: str) -> Markup:
-    """Découpe un texte dense en paragraphes suivant la ponctuation de fin de phrase."""
+    """Découpe un texte dense en paragraphes ; si le texte contient une liste
+    numérotée (même hybride), elle est rendue en <ol> — jamais en marqueurs bruts."""
     cleaned = _clean(s)
+    intro, steps = _split_steps(cleaned)
+    if steps:
+        return _numbered_list_html(intro, steps)
     sentences = [p.strip() for p in _SENT_SPLIT.split(cleaned) if p.strip()]
     if len(sentences) <= 1:
         return Markup(_math_to_html(cleaned))
@@ -252,13 +315,7 @@ def _action_html(s: str) -> Markup:
     intro, steps = _split_steps(cleaned)
     if not steps:
         return _paragraphs(s)
-    parts = []
-    if intro.strip():
-        parts.append(f"<p>{_math_to_html(intro.strip())}</p>")
-    parts.append("<ol class='step-list'>")
-    parts.extend(f"<li>{_math_to_html(step)}</li>" for step in steps)
-    parts.append("</ol>")
-    return Markup("".join(parts))
+    return _numbered_list_html(intro, steps)
 
 
 def _display_id(rid: str) -> str:

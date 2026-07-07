@@ -48,6 +48,7 @@ Le `score` dans les données est la décision finale de l'enseignant. Tu dois la
 Pour chaque question `score = 0` :
 - Compare `observed_answer` vs `correct_answer` : quelle règle, propriété ou procédure est absente ou mal appliquée ?
 - Si `observed_answer = "—"` : absence sans réponse — signale l'absence, ne spécule pas sur la cause
+- **Questions de construction géométrique** : `observed_answer` est alors la description de la figure tracée (ex : "(D) et (L) tracées, se coupent en un point"). Analyse la propriété géométrique manquante comme pour toute erreur. Exception : si `comment_ia` indique "Figure non décrite par la transcription", l'échec peut venir de la numérisation et non de l'élève — signale la compétence en `level: "unknown"` et ne génère pas de cause cachée.
 - **Filtre inattention** : si la même compétence mathématique est réussie (`score = 1`) dans une autre question du test, mais échouée une seule fois ici, classe l'erreur comme `"erreur_inattention"`. Ne génère pas de cause cachée élaborée pour une étourderie isolée — le tuteur perdrait du temps sur un faux signal.
 
 **Étape 2 — Remontée vers la cause racine et dette de cycle**
@@ -114,6 +115,19 @@ Exemples corrects :
 - Toute mention du score ou pourcentage ("bonne maîtrise générale", "score satisfaisant")
 - Regroupements de questions ("Num. 3a à 3d", "Num. 6 à 13")
 - Formulations vagues non ancrées sur une question précise ("bonne logique de raisonnement")
+
+---
+
+## Règle n°1bis — Format des `weaknesses` : titre de compétence d'abord
+
+Chaque entrée de `weaknesses` suit obligatoirement le format :
+`[Intitulé de compétence] : [mécanisme précis observé] — Q_ID`
+
+**L'intitulé avant les deux-points est réutilisé tel quel comme titre de série sur le sujet de remédiation remis à l'élève.** Il doit donc être un intitulé de leçon court et autonome, compréhensible par un élève de 11 à 15 ans — jamais une phrase diagnostique. Tout le vocabulaire de diagnostic (valeurs de la copie, "au lieu de", "l'élève écrit…", "confusion…", "absence de réponse") va **après** les deux-points.
+
+- Correct : `Calcul posé d'une addition entière : erreur de retenue produisant 5 846 au lieu de 5 856 — Q_NUM_04a`
+- Correct : `Tracé d'une droite passant par deux points donnés : absence de réponse — Q_GEO_02`
+- Incorrect : `L'élève a écrit 5 846 au lieu de 5 856 — Q_NUM_04a` (aucun intitulé de compétence en tête)
 
 ---
 

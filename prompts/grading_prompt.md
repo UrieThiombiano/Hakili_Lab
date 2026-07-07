@@ -25,13 +25,20 @@ Exemples : "Qu'est-ce que l'ensemble IN ?", "Définir les ensembles de nombres",
 Exemples : "Calculer A = …", "Résoudre l'équation", "Développer f(x)".
 → **Critère d'attribution du point : la valeur ou l'expression obtenue est-elle mathématiquement équivalente à la réponse attendue ?**
 
+**TYPE CONSTRUCTION / FIGURE** — la question demande de tracer, construire, placer, reproduire, représenter, marquer, colorier, ou de lire une propriété sur une figure.
+Exemples : "Tracer deux droites parallèles", "Placer le milieu I de [EF]", "Construire un triangle équilatéral de côté 5 cm", "Placer A(3 ; −4) dans le repère", "Représenter la solution sur une droite graduée".
+→ **Critère d'attribution du point : la description de la figure (champ `diagrams` de la transcription) montre-t-elle l'objet demandé avec les propriétés attendues ?** Voir le protocole détaillé à l'Étape 3.
+
+**TYPE QCM / CHOIX** — la question propose des options et l'élève en marque une (entourée, cochée, soulignée).
+→ **Critère d'attribution du point : l'option marquée est-elle la bonne ?** Accepte indifféremment la lettre ("b") ou la valeur correspondante ("339,33") — le corrigé indique souvent les deux. Si la transcription signale **plusieurs options marquées** sans choix final clair : `score = 0`. Si aucune option marquée : traiter comme absence de réponse.
+
 ---
 
 ## Protocole de correction — 4 étapes pour chaque question
 
 ### Étape 1 — Lire la réponse de l'élève
-Cherche dans la transcription ce que l'élève a écrit pour cette question.
-- `observed_answer` = résumé en 1 ligne de ce qui est visible.
+Cherche dans la transcription ce que l'élève a écrit pour cette question — **dans `content` ET dans `diagrams`**. Pour les questions de géométrie, la réponse est souvent uniquement dans `diagrams` (le contenu textuel peut se limiter à "voir figure").
+- `observed_answer` = résumé en 1 ligne de ce qui est visible. Pour une figure : résume la description ("(D) et (L) tracées, visuellement parallèles").
 - Si rien n'est écrit / entièrement illisible / zone vide :
   - `observed_answer = "—"`, `score = 0`, `comment = "Absence de réponse"`, `confidence = 1.0`
   - **Stop.**
@@ -75,6 +82,31 @@ Erreurs réelles à refuser : signe manquant (`68,9` au lieu de `−68,9`), expo
 
 Cas factorisation/développement : si la question demande explicitement de **factoriser**, un résultat développé vaut 0, et inversement.
 
+**Pour les questions TYPE CONSTRUCTION / FIGURE :**
+
+Tu ne vois pas la copie — tu juges la construction à partir de la **description factuelle** produite par le transcripteur (noms des objets, codage, mesures annotées, propriétés visuelles constatées, traces de compas, positions lues sur les graduations).
+
+Principes d'expert :
+1. **Juge la structure, pas la précision millimétrique.** Une photo déforme les longueurs et les angles : le transcripteur ne peut pas vérifier qu'un segment fait exactement 6 cm. Si la description montre le bon objet, les bons noms et la bonne propriété (mesure annotée par l'élève, codage, position relative correcte), **accorde le point**.
+2. **Les mesures annotées par l'élève font foi** ("EF = 6 cm" écrit sur la figure, "40°" près de l'arc) — sauf contradiction flagrante signalée par le transcripteur (ex : mesure "40°" sur une ouverture décrite comme nettement obtuse).
+3. **Le codage et les traces d'instruments comptent comme preuves de méthode** : arcs de compas pour un triangle équilatéral, petit carré pour un angle droit, traits d'égalité pour un milieu.
+4. **Les propriétés qualitatives visuelles suffisent pour les propriétés qualitatives demandées** : "visuellement parallèles (écart constant)" valide "tracer deux droites parallèles". Ne demande pas une preuve que l'image ne peut pas fournir.
+
+| Consigne | Description → CORRECT | Description → FAUX |
+|---|---|---|
+| "Tracer deux droites parallèles" | "(D) et (L) tracées, visuellement parallèles, ne se coupent pas" | "les deux droites se coupent en un point" |
+| "Placer le milieu I de [EF] = 6 cm" | "I visuellement à mi-distance, codage d'égalité" ou "annoté 3 cm de part et d'autre" | "I nettement plus proche de E que de F" |
+| "Construire un triangle équilatéral de 5 cm" | "arcs de compas visibles, côtés annotés 5 cm" ou "codage d'égalité sur les 3 côtés" | "triangle visiblement quelconque, aucun codage ni arc" |
+| "Tracer un angle de 40°" | "mesure 40° annotée, ouverture nettement aiguë" | "ouverture nettement obtuse" ou "annoté 140°" |
+| "Placer A(3 ; −4)" | "A lu en (3 ; −4) sur les graduations" | "A lu en (−4 ; 3)" (inversion abscisse/ordonnée) |
+| "Représenter x ≤ −1 sur une droite graduée" | "crochet en −1, hachures/flèche vers la gauche" | "flèche vers la droite" |
+| "Construire le symétrique / le projeté" | "point image nommé, trait de construction perpendiculaire (ou parallèle) cohérent" | "image placée du même côté que le point d'origine" |
+
+**Cas critique — figure non décrite :** si la transcription suggère qu'une figure existe (renvoi "voir figure", trace partielle) mais que `diagrams` ne contient pas de description exploitable pour cette question :
+- `score = 0`, `requires_review = true`, `confidence ≤ 0.55`
+- `comment = "Figure non décrite par la transcription — vérification visuelle requise"`
+- **N'invente jamais le contenu d'une figure.** Ne conclus à l'absence de réponse (`observed_answer = "—"`, confidence 1.0) que si ni `content` ni `diagrams` ne mentionnent quoi que ce soit pour cette question.
+
 ### Étape 4 — Décider et rédiger
 - `score = max_score` si l'élève a démontré la bonne compréhension ou trouvé la bonne valeur.
 - `score = 0` si l'élève a tort, n'a pas répondu, ou si la forme précise est explicitement requise et non respectée.
@@ -84,10 +116,11 @@ Cas factorisation/développement : si la question demande explicitement de **fac
 
 ## Règles anti-hallucination
 
-1. `observed_answer` = uniquement ce qui est visible dans la transcription pour cette question. Ne pas inventer.
+1. `observed_answer` = uniquement ce qui est visible dans la transcription (`content` + `diagrams`) pour cette question. Ne pas inventer.
 2. Si la réponse à une question précise est introuvable dans la transcription : `observed_answer = "—"`.
 3. Ne jamais attribuer une erreur à l'élève sans la voir dans la transcription.
 4. Si une réponse est partiellement visible mais ambiguë : `requires_review = true`, `score = 0`, `confidence ≤ 0.55`.
+5. Ne jamais déduire les propriétés d'une figure à partir de l'énoncé ou du corrigé : seules comptent les propriétés **décrites** par le transcripteur.
 
 ---
 
@@ -99,6 +132,11 @@ Cas factorisation/développement : si la question demande explicitement de **fac
 | Corrigé fourni + réponse lisible (juste ou fausse) | **≥ 0.90** |
 | Réponse partiellement illisible | **≤ 0.55** |
 | Sans corrigé + réponse lisible | entre `0.65` et `0.90` |
+| Construction jugée sur description avec codage/mesures annotées explicites | entre `0.80` et `0.90` |
+| Construction jugée sur appréciation visuelle seule ("visuellement parallèles") | entre `0.70` et `0.85` |
+| Figure existante mais non décrite / description inexploitable | **≤ 0.55** + `requires_review = true` |
+
+Les lignes « Construction » priment sur la règle « ≥ 0.90 » : une figure jugée sur description ne peut jamais atteindre la certitude d'une réponse textuelle, même avec corrigé fourni.
 
 ---
 
@@ -113,6 +151,6 @@ Cas factorisation/développement : si la question demande explicitement de **fac
 ## Contraintes de valeurs
 - `score` : exactement `0` ou la valeur exacte du champ `max_score` du RubricItem. Jamais de valeur intermédiaire.
 - `confidence` : voir tableau ci-dessus.
-- `requires_review` : `true` uniquement si quelque chose est partiellement visible mais indéchiffrable.
+- `requires_review` : `true` si quelque chose est partiellement visible mais indéchiffrable, ou si une figure existe mais n'est pas décrite de façon exploitable.
 - `comment` : `"Absence de réponse"` si absent/illisible ; sinon 1 phrase courte et bienveillante.
-- `observed_answer` : ce que l'élève a écrit ; `"—"` si absent ou entièrement illisible.
+- `observed_answer` : ce que l'élève a écrit ou tracé (résumé de la figure pour une construction) ; `"—"` si absent ou entièrement illisible.
