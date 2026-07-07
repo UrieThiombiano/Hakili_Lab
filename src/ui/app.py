@@ -8,6 +8,29 @@ from pathlib import Path
 # Assure que la racine du projet est dans le path (nécessaire sur Windows)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+
+def _purge_stale_src_modules() -> None:
+    """Streamlit ré-exécute app.py à chaud SANS redémarrer le processus Python
+    (notamment lors d'un redéploiement Streamlit Cloud) : les modules src.*
+    déjà importés restent alors en cache dans leur ANCIENNE version et lèvent
+    des ImportError sur tout symbole ajouté depuis. Quand les sources ont
+    changé depuis le dernier passage, purger sys.modules force la
+    réimportation à neuf de tout le paquet src."""
+    src_dir = Path(__file__).resolve().parent.parent
+    mtimes = [p.stat().st_mtime for p in src_dir.rglob("*.py")]
+    stamp = (len(mtimes), max(mtimes))
+    if getattr(sys, "_hakili_src_stamp", None) != stamp:
+        for name in [m for m in sys.modules if m == "src" or m.startswith("src.")]:
+            del sys.modules[name]
+        sys._hakili_src_stamp = stamp  # type: ignore[attr-defined]
+
+
+# Uniquement en exécution `streamlit run` (__name__ == "__main__") : importé
+# comme module (tests), app.py est lui-même dans sys.modules sous "src.ui.app"
+# et se purger en pleine importation casserait le chargement.
+if __name__ == "__main__":
+    _purge_stale_src_modules()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
@@ -22,6 +45,7 @@ from src.pipeline.math_format import (
     humanize_ids_in_text,
     math_to_html,
 )
+from src.pipeline.text_structuring import series_title, split_question
 
 st.set_page_config(
     page_title="Hakili Lab — Correction IA",
@@ -813,13 +837,11 @@ def _display_results(result, key_prefix: str = "") -> None:
         for ex in result.remediation_subject.exercises:
             if ex.topic != current_topic:
                 current_topic = ex.topic
-                from src.pipeline.pdf_remediation_html import _series_title
-                st.markdown(f"**Série : {_mh(_series_title(ex.topic))}**", unsafe_allow_html=True)
+                st.markdown(f"**Série : {_mh(series_title(ex.topic))}**", unsafe_allow_html=True)
             with st.expander(f"Exercice {ex.number}"):
                 # Même découpage positionnel que le PDF : une seule numérotation,
                 # jamais les marqueurs bruts du LLM ("(1)…" mêlé à "1.…")
-                from src.pipeline.pdf_remediation_html import _split_question
-                _enonce, _tasks = _split_question(str(ex.question))
+                _enonce, _tasks = split_question(str(ex.question))
                 _q_html = f"<p>{_mh(_enonce)}</p>" if _enonce else ""
                 if _tasks:
                     _q_html += "<ol>" + "".join(f"<li>{_mh(t)}</li>" for t in _tasks) + "</ol>"

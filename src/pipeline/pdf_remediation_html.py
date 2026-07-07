@@ -4,7 +4,6 @@ Génération PDF feuille de remédiation via xhtml2pdf (HTML+CSS → PDF, pur Py
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -13,98 +12,13 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
-# ── Découpage des questions en énoncé + tâches numérotées ────────────────────
-
-from src.pipeline.text_structuring import split_numbered_items
-
-# Séparation sur ". " suivi d'une majuscule (ponctuation de fin de phrase)
-_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÁÉÈÊËÀÂÙÛÎÏÙÛÜ])')
-
-# Verbes d'action français (infinitif) qui introduisent une tâche
-_TASK_VERBS = re.compile(
-    r'^(Puis\s+|Ensuite[\s,]+)?(Calculer|Simplifier|R[eé]soudre|Identifier|'
-    r'Pr[eé]senter|V[eé]rifier|[EÉé]crire|Montrer|Factoriser|D[eé]composer|'
-    r'D[eé]velopper|Trouver|Poser|Exprimer|Justifier|Repr[eé]senter|'
-    r'D[eé]terminer|Comparer|Classer|Lister|Conclure|Indiquer|Expliquer|'
-    r'D[eé]montrer|Appliquer|D[eé]duire|Utiliser|Dresser|Effectuer|'
-    r'R[eé]duire|Donner|Mod[eé]liser|Construire|Tracer|[EÉ]valuer|'
-    r'Prouver|[EÉ]tablir|Partager|D[eé]finir|Repr[eé]senter|Calculez|'
-    r'Résolvez|Vérifiez|Montrez|Trouvez)\b',
-    re.IGNORECASE,
+# Découpage question et titre de série : centralisés dans text_structuring
+# (partagés avec l'UI). Alias soulignés conservés : usages internes et tests
+# existants inchangés.
+from src.pipeline.text_structuring import (
+    series_title as _series_title,
+    split_question as _split_question,
 )
-
-
-def _split_question(text: str) -> tuple[str, list[str]]:
-    """
-    Découpe le texte d'un exercice en (énoncé_contexte, [tâche1, tâche2, …]).
-
-    Priorité 1 : marqueurs de numérotation ("(1)", "2.", "3)") traités comme
-    des frontières positionnelles par split_numbered_items — les numéros émis
-    par le LLM sont ignorés, la numérotation visible est régénérée par le
-    template. L'énoncé peut être vide si le texte démarre sur un marqueur
-    (le template n'affiche alors pas de bloc contexte).
-    Priorité 2 : phrases débutant par un verbe d'action → tâches numérotées.
-    Les phrases contextuelles (ex: "Un père a 3 fois…") → énoncé.
-    Si aucun marqueur détecté, première phrase = énoncé, reste = tâches.
-    """
-    text = text.strip()
-
-    intro, tasks = split_numbered_items(text)
-    if tasks:
-        return intro, tasks
-
-    sentences = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
-    if len(sentences) <= 1:
-        return text, []
-
-    enonce_parts: list[str] = []
-    tasks = []
-
-    for sent in sentences:
-        if _TASK_VERBS.match(sent):
-            tasks.append(sent)
-        elif tasks:
-            # Phrase non-tâche après des tâches → rattacher à la dernière tâche
-            tasks[-1] = tasks[-1].rstrip('.') + '. ' + sent
-        else:
-            enonce_parts.append(sent)
-
-    if not tasks:
-        # Aucun verbe d'action → première phrase = énoncé, reste = tâches
-        return enonce_parts[0], enonce_parts[1:]
-
-    return ' '.join(enonce_parts), tasks
-
-# ── Titre de série élève ──────────────────────────────────────────────────────
-# Les topics sont les libellés `weaknesses` du diagnostic, au format
-# "Compétence : symptôme observé sur la copie — Num. X". Le symptôme et la
-# référence de question sont du vocabulaire de diagnostic destiné à
-# l'enseignant — sur le sujet remis à l'élève, seul l'intitulé de compétence
-# fait un titre de série cohérent.
-
-# Références de questions en fin de libellé : "— Num. 4a", "— Geo. 2, Geo. 4", "— Q_NUM_07"
-_TRAILING_QREFS = re.compile(
-    r"\s*[—–-]\s*(?:(?:Num|G[ée]o)\.\s*\w+|Q_\w+)(?:\s*(?:,|et)\s*(?:(?:Num|G[ée]o)\.\s*\w+|Q_\w+))*\s*$",
-    re.IGNORECASE,
-)
-
-
-def _series_title(topic: str) -> str:
-    """Extrait un titre de série présentable pour l'élève depuis un libellé
-    de faiblesse diagnostic. Ne modifie jamais `topic` lui-même (clé de
-    regroupement des séries et contrat de validation orchestrateur)."""
-    t = _TRAILING_QREFS.sub("", topic.strip())
-    # L'intitulé de compétence est la proposition avant le premier " : "
-    head = t.split(" : ", 1)[0].strip()
-    if len(head) >= 8:
-        t = head
-    t = t.strip(" .;:—–-")
-    if not t:
-        t = topic.strip()
-    if len(t) > 90:
-        t = t[:90].rsplit(" ", 1)[0] + "…"
-    return t[:1].upper() + t[1:] if t else t
-
 
 _MONTHS_FR = [
     "", "janvier", "février", "mars", "avril", "mai", "juin",
