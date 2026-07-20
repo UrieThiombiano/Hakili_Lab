@@ -26,7 +26,7 @@ pandas>=2.2.0
 # --- Fournisseurs IA ---
 anthropic>=0.40.0
 google-generativeai>=0.8.0
-openai>=1.30.0        # DeepSeek (API compatible OpenAI)
+openai>=1.30.0        # DeepSeek (API compatible OpenAI) + GPT-5 (fallback)
 mistralai>=1.0.0,<2.0.0   # Mistral Small 3.1 — v2.x a changé l'API
 
 # --- Réseau & Robustesse ---

@@ -506,28 +506,11 @@ def _mt(s: str) -> str:
 
 
 # ── Relecture transcription — marqueurs de confiance (3 niveaux) ──────────────
-# ⟦texte⟧ = incertain (orange) — [ILLISIBLE] = illisible (rouge) — reste = confiant (pas de marquage).
-# Convention posée dans prompts/transcription_prompt.md.
+# ⟦texte⟧ = incertain — [ILLISIBLE] = illisible — reste = confiant (pas de marquage).
+# Convention posée dans prompts/transcription_prompt.md. Affichés en clair dans
+# le champ éditable (pas de rendu coloré — voir render_transcription_review).
 
 _UNCERTAIN_RE = re.compile(r"⟦([^⟧]*)⟧|(\[ILLISIBLE\])")
-
-
-def _render_transcription_html(content: str) -> str:
-    """Transforme le texte transcrit (avec marqueurs) en HTML surligné à
-    3 niveaux, pour affichage en lecture seule à côté de l'image de la page."""
-    parts: list[str] = []
-    last = 0
-    for m in _UNCERTAIN_RE.finditer(content):
-        if m.start() > last:
-            parts.append(_mh(content[last:m.start()]))
-        if m.group(1) is not None:
-            parts.append(f'<span class="trans-uncertain">{_mh(m.group(1))}</span>')
-        else:
-            parts.append(f'<span class="trans-illisible">{_mh(m.group(2))}</span>')
-        last = m.end()
-    if last < len(content):
-        parts.append(_mh(content[last:]))
-    return "".join(parts).replace("\n", "<br>")
 
 
 def _strip_transcription_markers(content: str) -> str:
@@ -602,34 +585,19 @@ def _render_diag_overview(diag) -> str:
 def render_transcription_review(transcription, ingestion, key_prefix: str = "") -> None:
     """
     Écran de relecture transcription — étape 1 de la Phase A.
-    Pour chaque page : image de la copie à gauche, transcription surlignée
-    à 3 niveaux (confiant / incertain / illisible) + zone éditable à droite.
-    Stocke les éditions dans st.session_state["transcription_edits"]
-    ({page_number: {"raw": texte_original_avec_marqueurs, "edited": texte_enseignant}}).
+    Pour chaque page : image de la copie à gauche, transcription éditable à
+    droite — un champ unique, marqueurs de confiance visibles en clair
+    (⟦texte⟧ = incertain, [ILLISIBLE] = illisible) que l'enseignant corrige
+    directement dans le texte. Stocke les éditions dans
+    st.session_state["transcription_edits"] ({page_number: texte_enseignant}).
     """
     if "transcription_edits" not in st.session_state:
         st.session_state["transcription_edits"] = {}
 
-    st.markdown("""
-    <style>
-    .trans-uncertain {
-        background:#fdf0d8; color:#8a5a00; border-radius:3px; padding:0 2px;
-    }
-    .trans-illisible {
-        background:#fbe0dd; color:#c0392b; border-radius:3px; padding:0 2px; font-weight:600;
-    }
-    .trans-page-box {
-        border:1px solid #e8eef8; border-radius:8px; padding:14px 16px;
-        background:#fbfcfe; font-size:13.5px; line-height:1.7; min-height:140px;
-    }
-    .trans-legend span { margin-right:16px; font-size:11.5px; color:#5a7290; }
-    </style>
-    <div class="trans-legend">
-        <span><span class="trans-uncertain">&nbsp;texte&nbsp;</span> incertain</span>
-        <span><span class="trans-illisible">&nbsp;texte&nbsp;</span> illisible</span>
-        <span>texte normal = lecture confiante</span>
-    </div>
-    """, unsafe_allow_html=True)
+    st.caption(
+        "⟦texte⟧ = lecture incertaine  ·  [ILLISIBLE] = passage illisible — "
+        "corrigez directement dans le texte ci-dessous."
+    )
 
     edits = st.session_state["transcription_edits"]
     page_images = {i + 1: p for i, p in enumerate(ingestion.pages)} if ingestion else {}
@@ -647,21 +615,16 @@ def render_transcription_review(transcription, ingestion, key_prefix: str = "") 
                 st.caption("Image indisponible")
 
         with col_txt:
-            raw_content = edits.get(idx, {}).get("raw", page.content)
-            st.markdown(
-                f'<div class="trans-page-box">{_render_transcription_html(raw_content)}</div>',
-                unsafe_allow_html=True,
-            )
-            default_edit = edits.get(idx, {}).get("edited", _strip_transcription_markers(raw_content))
+            default_text = edits.get(idx, page.content)
             edited = st.text_area(
                 f"Transcription page {idx}",
-                value=default_edit,
-                height=220,
+                value=default_text,
+                height=280,
                 key=f"{key_prefix}trans_edit_{idx}",
                 label_visibility="collapsed",
                 help="Corrigez directement le texte si la transcription IA s'est trompée.",
             )
-            edits[idx] = {"raw": raw_content, "edited": edited}
+            edits[idx] = edited
 
         if page.uncertainties:
             with st.expander(f"⚠ {len(page.uncertainties)} zone(s) signalée(s) — page {idx}"):
@@ -674,11 +637,12 @@ def render_transcription_review(transcription, ingestion, key_prefix: str = "") 
 
 
 def _apply_transcription_edits(transcription, edits: dict) -> None:
-    """Réécrit transcription.pages[i].content avec le texte validé par l'enseignant."""
+    """Réécrit transcription.pages[i].content avec le texte validé par l'enseignant
+    (marqueurs ⟦…⟧ résiduels retirés — seuls [ILLISIBLE] sont conservés tels quels)."""
     for page in transcription.pages:
         e = edits.get(page.page_number)
         if e is not None:
-            page.content = e["edited"]
+            page.content = _strip_transcription_markers(e)
 
 
 def render_validation_table(grade, rubric=None) -> None:

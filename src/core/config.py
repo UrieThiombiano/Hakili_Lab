@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     mistral_model: str = "mistral-small-latest"
     mistral_vision_model: str = "pixtral-12b-2409"
 
+    # OpenAI (filet de secours GPT-5 — remplace Claude comme fallback partout
+    # où un fallback existe : transcription, nom élève, correction, diagnostic,
+    # remédiation. Claude reste seul utilisé là où il n'y a pas d'alternative :
+    # extraction sujet/barème, barème virtuel, enrichissement 20/20.)
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5"
+
     # Seuils pipeline
     confidence_review_threshold: float = 0.75
 

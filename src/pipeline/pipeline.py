@@ -20,7 +20,12 @@ Routage multi-providers (contrôlé par .env) :
   Correction     → GRADING_PROVIDER     : "deepseek" | "claude"
   Diagnostic     → DIAGNOSTIC_PROVIDER  : "deepseek" | "mistral" | "claude"
   Remédiation    → REMEDIATION_PROVIDER : "mistral" | "deepseek" | "claude"
-  Fallback automatique sur Claude si la clé API du provider est absente.
+
+  Fallback automatique sur GPT-5 (OpenAI) si le provider principal de l'étape
+  échoue — transcription, nom élève, correction, diagnostic, remédiation.
+  Claude n'est plus utilisé comme fallback : il reste seul utilisé là où il
+  n'y a pas d'alternative (extraction sujet/barème uploadé, barème virtuel,
+  enrichissement 20/20 — voir claude_client.py).
 """
 from __future__ import annotations
 
@@ -32,6 +37,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.api.claude_client import ClaudeClient
+from src.api.openai_client import OpenAIClient
 from src.core.config import settings
 from src.knowledge.curriculum_retriever import CurriculumRetriever
 from src.models.domain import (
@@ -118,6 +124,15 @@ def _make_remediation_client():
     return ClaudeClient()
 
 
+def _fallback_openai_client() -> OpenAIClient | None:
+    """Instancie le client GPT-5 de secours — None (et log) si OPENAI_API_KEY absente."""
+    try:
+        return OpenAIClient()
+    except ValueError as e:
+        logger.error("Fallback GPT-5 indisponible : %s", e)
+        return None
+
+
 def _client_label(client, step: str = "") -> str:
     cls = type(client).__name__
     if cls == "GeminiTranscriptionClient":
@@ -130,6 +145,8 @@ def _client_label(client, step: str = "") -> str:
         return f"DeepSeek V3 · {settings.deepseek_model_v3}"
     if cls == "MistralRemediationClient":
         return f"Mistral Small · {settings.mistral_model}"
+    if cls == "OpenAIClient":
+        return f"GPT-5 · {settings.openai_model}"
     if step == "diagnostic":
         return f"Claude Opus · {settings.claude_model_opus}"
     return f"Claude · {settings.claude_model_heavy}"
@@ -291,7 +308,19 @@ def _run_transcription(
         or len(student_name.strip()) <= 2
     )
     if _name_is_placeholder and ingestion.pages:
-        extracted = claude_client.extract_student_name(ingestion.pages[0])
+        extracted = ""
+        if hasattr(transcription_client, "extract_student_name"):
+            try:
+                extracted = transcription_client.extract_student_name(ingestion.pages[0])
+            except Exception as exc:
+                logger.warning(
+                    "[%s] extract_student_name (%s) échoué : %s",
+                    copy_id, type(transcription_client).__name__, exc,
+                )
+        if not extracted and type(transcription_client).__name__ != "OpenAIClient":
+            fallback = _fallback_openai_client()
+            if fallback is not None:
+                extracted = fallback.extract_student_name(ingestion.pages[0])
         if extracted:
             student_name = extracted
 
@@ -315,10 +344,12 @@ def _run_transcription(
     _progress("transcription", 30)
     trans_resp = transcription_client.transcribe(copy_id, ingestion.pages)
     if not trans_resp.success or trans_resp.data is None:
-        if type(transcription_client).__name__ != "ClaudeClient":
-            logger.warning("[%s] Fallback transcription → Claude", copy_id)
-            trans_resp = claude_client.transcribe(copy_id, ingestion.pages)
-            result.model_routing["Transcription"] += f" → Claude (fallback)"
+        if type(transcription_client).__name__ != "OpenAIClient":
+            fallback = _fallback_openai_client()
+            if fallback is not None:
+                logger.warning("[%s] Fallback transcription → GPT-5", copy_id)
+                trans_resp = fallback.transcribe(copy_id, ingestion.pages)
+                result.model_routing["Transcription"] += " → GPT-5 (fallback)"
     if not trans_resp.success or trans_resp.data is None:
         result.errors.append(f"Transcription échouée : {trans_resp.error}")
         return result
@@ -404,17 +435,19 @@ def _run_grading(
         temperature=0,
     )
     if not grade_resp.success or grade_resp.data is None:
-        if type(_grading).__name__ != "ClaudeClient":
-            logger.warning("[%s] Fallback correction → Claude", copy_id)
-            grade_resp = claude_client.grade(
-                transcription=result.transcription,
-                rubric=rubric,
-                subject_text=result.subject_text,
-                expert_instructions=result.expert_instructions,
-                official_answers=result.official_answers,
-                temperature=0,
-            )
-            result.model_routing["Correction (proposition IA)"] += " → Claude (fallback)"
+        if type(_grading).__name__ != "OpenAIClient":
+            fallback = _fallback_openai_client()
+            if fallback is not None:
+                logger.warning("[%s] Fallback correction → GPT-5", copy_id)
+                grade_resp = fallback.grade(
+                    transcription=result.transcription,
+                    rubric=rubric,
+                    subject_text=result.subject_text,
+                    expert_instructions=result.expert_instructions,
+                    official_answers=result.official_answers,
+                    temperature=0,
+                )
+                result.model_routing["Correction (proposition IA)"] += " → GPT-5 (fallback)"
     if not grade_resp.success or grade_resp.data is None:
         result.errors.append(f"Correction échouée : {grade_resp.error}")
         return result
@@ -585,9 +618,11 @@ def _run_phase_b(
         _progress("diagnostic", 75)
         diag_resp = diagnostic_client.diagnose(grade, curriculum_context=curriculum_context)
         if not diag_resp.success or diag_resp.data is None:
-            if type(diagnostic_client).__name__ != "ClaudeClient":
-                logger.warning("[%s] Fallback diagnostic → Claude", copy_id)
-                diag_resp = claude_client.diagnose(grade, curriculum_context=curriculum_context)
+            if type(diagnostic_client).__name__ != "OpenAIClient":
+                fallback = _fallback_openai_client()
+                if fallback is not None:
+                    logger.warning("[%s] Fallback diagnostic → GPT-5", copy_id)
+                    diag_resp = fallback.diagnose(grade, curriculum_context=curriculum_context)
         if diag_resp.success and diag_resp.data is not None:
             diag_resp.data.competency_gaps = competency_gaps
             vd = validate_diagnostic(diag_resp.data, grade)
@@ -601,9 +636,11 @@ def _run_phase_b(
         if result.diagnostic is not None:
             rem_resp = remediation_client.generate_remediation_subject(result.diagnostic)
             if not rem_resp.success or rem_resp.data is None:
-                if type(remediation_client).__name__ != "ClaudeClient":
-                    logger.warning("[%s] Fallback remédiation → Claude", copy_id)
-                    rem_resp = claude_client.generate_remediation_subject(result.diagnostic)
+                if type(remediation_client).__name__ != "OpenAIClient":
+                    fallback = _fallback_openai_client()
+                    if fallback is not None:
+                        logger.warning("[%s] Fallback remédiation → GPT-5", copy_id)
+                        rem_resp = fallback.generate_remediation_subject(result.diagnostic)
             if rem_resp.success and rem_resp.data is not None:
                 vr = validate_remediation(rem_resp.data, result.diagnostic)
                 result.validation_issues.extend(vr.issues)

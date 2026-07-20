@@ -214,7 +214,7 @@ class GeminiTranscriptionClient:
         except Exception as e:
             # Tenacity a épuisé ses tentatives et re-lève l'exception.
             # On la convertit en ClaudeResponse(success=False) pour déclencher
-            # proprement le fallback Claude dans le pipeline.
+            # proprement le fallback GPT-5 dans le pipeline.
             logger.error(
                 "Gemini transcription abandonnée après retries (copy_id=%s) : %s",
                 copy_id, e,
@@ -223,6 +223,37 @@ class GeminiTranscriptionClient:
                 success=False, data=None, confidence=0.0,
                 raw_response="", error=str(e),
             )
+
+    # ── Nom de l'élève depuis la première page ────────────────────────────────
+
+    def extract_student_name(self, first_page: Path) -> str:
+        """
+        Lit la première page de la copie et retourne le nom complet de l'élève.
+        Cherche les champs NOM / PRENOM / NOM ET PRENOM / NAME typiques d'une
+        feuille d'examen. Retourne une chaîne vide si rien n'est trouvé ou en
+        cas d'erreur — le pipeline retente alors avec Claude.
+        """
+        prompt = (
+            "Regarde cette image de copie d'élève. "
+            "Trouve le nom et le prénom de l'élève (champs NOM, PRENOM, "
+            "NOM ET PRENOM, ou équivalent). "
+            "Retourne UNIQUEMENT le nom complet sous la forme 'Prénom NOM', "
+            "sans aucun autre texte ni ponctuation. "
+            "Si tu ne trouves pas de nom, retourne exactement la chaîne vide."
+        )
+        try:
+            response = self._client.models.generate_content(
+                model=self._model,
+                contents=[prompt, Image.open(first_page)],
+                config=types.GenerateContentConfig(max_output_tokens=64, temperature=0),
+            )
+            name = (response.text or "").strip()
+            if len(name) > 80 or "\n" in name:
+                return ""
+            return name
+        except Exception as e:
+            logger.warning("Gemini extract_student_name échoué : %s", e)
+            return ""
 
     # ── Batching ──────────────────────────────────────────────────────────────
 
