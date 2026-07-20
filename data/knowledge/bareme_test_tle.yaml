@@ -262,18 +262,7 @@ questions_numeriques:
     requires_review: false
 
   # ── Exercice 8 ───────────────────────────────────────────────────────────
-  - id: Q_NUM_08a
-    numero: "Exe 8 ligne 1"
-    niveau_programme: ["Tle"]
-    enonce_court: "Compléter le tableau : x ∈ [3;7] — valeur absolue, distance, encadrement"
-    competences_cibles:
-      - "Traduire un intervalle en valeur absolue |x−a| ≤ r et en distance d(x;a) ≤ r"
-    chunk_ids:
-      - 4e_NUM_Ch5_L2   # Inéquations — valeur absolue et intervalles
-    points_originaux: 0.5
-    requires_review: false
-
-  - id: Q_NUM_08b
+  - id: Q_NUM_08
     numero: "Exe 8 ligne 2"
     niveau_programme: ["Tle"]
     enonce_court: "Compléter le tableau : x ∈ [−1;13] — valeur absolue, distance, encadrement"

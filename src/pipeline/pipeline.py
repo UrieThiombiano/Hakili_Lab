@@ -2,11 +2,18 @@
 Pipeline Hakili Lab — Correction assistée par IA.
 
 Flux en deux phases :
-  Phase A : ingestion → transcription → correction IA → (arrêt : validation enseignant)
+  Phase A : ingestion → transcription → (relecture enseignant) → correction IA
+            → (arrêt : validation enseignant)
   Phase B : RAG → diagnostic → remédiation → export PDF + JSON
 
-  L'interface appelle run_phase_a(), présente le tableau de validation à l'enseignant,
-  puis appelle run_phase_b() une fois la validation complète.
+  Mode Copie Unique (interactif, avec relecture transcription) :
+    run_transcription() → écran de relecture (l'enseignant corrige la
+    transcription) → run_grading() → tableau de validation → run_phase_b().
+
+  Mode Batch (pas de relecture transcription, trop coûteux en temps sur un
+  lot de copies) :
+    run_phase_a() [= run_transcription() + run_grading() enchaînés]
+    → tableau de validation → run_phase_b().
 
 Routage multi-providers (contrôlé par .env) :
   Transcription  → VISION_PROVIDER      : "gemini" | "claude"
@@ -150,10 +157,17 @@ class PipelineResult:
     subject_text: str = ""
     bareme_id: str = ""
     runs_dir: str = ""
+    # conservés entre run_transcription() et run_grading()
+    expert_instructions: str = ""
+    official_answers: str = ""
 
     @property
     def success(self) -> bool:
         return self.grade is not None and not self.errors
+
+    @property
+    def transcription_ready(self) -> bool:
+        return self.transcription is not None
 
     @property
     def phase_a_complete(self) -> bool:
@@ -164,9 +178,9 @@ class PipelineResult:
         return self.pdf_path is not None
 
 
-# ── Phase A — ingestion → transcription → correction IA ──────────────────────
+# ── Phase A — ingestion → transcription → (relecture enseignant) → correction IA ─
 
-def run_phase_a(
+def run_transcription(
     *,
     copy_id: str,
     student_name: str = "",
@@ -182,9 +196,10 @@ def run_phase_a(
     on_progress: Callable[[str, int], None] | None = None,
 ) -> PipelineResult:
     """
-    Phase A : ingestion → transcription → correction IA.
-    Retourne un PipelineResult avec grade.validation_complete = False.
-    Le pipeline s'arrête ici — l'enseignant doit valider via le tableau.
+    Étape 1 de la Phase A : ingestion → transcription. S'arrête avant la
+    correction — l'enseignant relit/corrige la transcription (écran de
+    relecture) avant qu'elle soit envoyée au modèle de correction via
+    run_grading().
     """
     sentinel = PipelineResult(
         copy_id=copy_id,
@@ -192,7 +207,7 @@ def run_phase_a(
         ingestion=None,  # type: ignore[arg-type]
     )
     try:
-        return _run_phase_a(
+        return _run_transcription(
             copy_id=copy_id,
             student_name=student_name,
             file_paths=file_paths,
@@ -207,12 +222,12 @@ def run_phase_a(
             on_progress=on_progress,
         )
     except Exception as exc:
-        logger.exception("[%s] Erreur Phase A : %s", copy_id, exc)
-        sentinel.errors.append(f"Erreur Phase A : {exc}")
+        logger.exception("[%s] Erreur transcription : %s", copy_id, exc)
+        sentinel.errors.append(f"Erreur transcription : {exc}")
         return sentinel
 
 
-def _run_phase_a(
+def _run_transcription(
     *,
     copy_id: str,
     student_name: str,
@@ -238,11 +253,9 @@ def _run_phase_a(
     out = Path(runs_dir or settings.runs_dir)
     claude_client = ClaudeClient()
     transcription_client = _make_transcription_client()
-    grading_client = _make_grading_client()
 
     logger.warning(
-        "[%s] Phase A — transcription=%s | grading=%s",
-        copy_id, type(transcription_client).__name__, type(grading_client).__name__,
+        "[%s] Transcription — provider=%s", copy_id, type(transcription_client).__name__,
     )
 
     # Extraction parallèle énoncé + barème si nécessaire
@@ -289,16 +302,17 @@ def _run_phase_a(
         rubric=rubric,
         subject_text=subject_text,
         bareme_id=bareme_id,
+        expert_instructions=expert_instructions,
+        official_answers=official_answers,
         runs_dir=str(out),
     )
     result.model_routing = {
         "Transcription": _client_label(transcription_client, "transcription"),
-        "Correction (proposition IA)": _client_label(grading_client, "grading"),
         "Extraction (barème/énoncé)": f"Claude · {settings.claude_model_heavy}",
     }
 
     # 2. Transcription
-    _progress("transcription", 20)
+    _progress("transcription", 30)
     trans_resp = transcription_client.transcribe(copy_id, ingestion.pages)
     if not trans_resp.success or trans_resp.data is None:
         if type(transcription_client).__name__ != "ClaudeClient":
@@ -316,13 +330,64 @@ def _run_phase_a(
         return result
     result.transcription = vt.data
 
+    _progress("awaiting_transcription_review", 45)
+    logger.warning(
+        "[%s] ✓ Transcription terminée — %d page(s) — en attente de relecture enseignant",
+        copy_id, len(result.transcription.pages),
+    )
+    return result
+
+
+def run_grading(
+    *,
+    result: PipelineResult,
+    on_progress: Callable[[str, int], None] | None = None,
+) -> PipelineResult:
+    """
+    Étape 2 de la Phase A : correction IA à partir de la transcription
+    validée par l'enseignant. Reçoit le PipelineResult produit par
+    run_transcription() — transcription.pages[i].content a pu être réécrit
+    par l'enseignant dans l'écran de relecture.
+    """
+    if result.transcription is None:
+        result.errors.append("Correction impossible : aucune transcription disponible.")
+        return result
+    sentinel = result
+    try:
+        return _run_grading(result=result, on_progress=on_progress)
+    except Exception as exc:
+        logger.exception("[%s] Erreur correction : %s", result.copy_id, exc)
+        sentinel.errors.append(f"Erreur correction : {exc}")
+        return sentinel
+
+
+def _run_grading(
+    *,
+    result: PipelineResult,
+    on_progress: Callable[[str, int], None] | None,
+) -> PipelineResult:
+
+    def _progress(step: str, pct: int) -> None:
+        if on_progress:
+            try:
+                on_progress(step, pct)
+            except Exception:
+                pass
+
+    copy_id = result.copy_id
+    rubric  = result.rubric or Rubric(subject="mathematics", total_points=0, items=[])
+
+    claude_client   = ClaudeClient()
+    grading_client  = _make_grading_client()
+    result.model_routing["Correction (proposition IA)"] = _client_label(grading_client, "grading")
+
     # Barème virtuel si aucun barème fourni
     if not rubric.items:
         rubric = claude_client.extract_questions_from_transcription(result.transcription)
         result.rubric = rubric
 
     # 3. Correction IA (proposition)
-    _progress("correction", 50)
+    _progress("correction", 55)
     # Sans barème (mode personnalisé ou extraction échouée), seul Claude peut auto-résoudre
     # les questions — DeepSeek/Mistral ne font pas de self-solving sur rubric vide.
     _grading = claude_client if not rubric.items else grading_client
@@ -333,9 +398,9 @@ def _run_phase_a(
     grade_resp = _grading.grade(
         transcription=result.transcription,
         rubric=rubric,
-        subject_text=subject_text,
-        expert_instructions=expert_instructions,
-        official_answers=official_answers,
+        subject_text=result.subject_text,
+        expert_instructions=result.expert_instructions,
+        official_answers=result.official_answers,
         temperature=0,
     )
     if not grade_resp.success or grade_resp.data is None:
@@ -344,9 +409,9 @@ def _run_phase_a(
             grade_resp = claude_client.grade(
                 transcription=result.transcription,
                 rubric=rubric,
-                subject_text=subject_text,
-                expert_instructions=expert_instructions,
-                official_answers=official_answers,
+                subject_text=result.subject_text,
+                expert_instructions=result.expert_instructions,
+                official_answers=result.official_answers,
                 temperature=0,
             )
             result.model_routing["Correction (proposition IA)"] += " → Claude (fallback)"
@@ -366,9 +431,9 @@ def _run_phase_a(
     result.grade = vg.data
 
     # Injecter les bonnes réponses officielles du corrigé dans chaque question
-    if bareme_id:
+    if result.bareme_id:
         from src.knowledge.answer_loader import get_answer_loader
-        answer_map = get_answer_loader().get_answer_map(bareme_id)
+        answer_map = get_answer_loader().get_answer_map(result.bareme_id)
         if answer_map:
             for q in result.grade.questions:
                 if not q.correct_answer and q.rubric_item_id in answer_map:
@@ -378,11 +443,52 @@ def _run_phase_a(
     _denom = result.grade.total_possible
     _score_20 = round(round(result.grade.total_score / _denom * 20 * 4) / 4, 2) if _denom else 0
     logger.warning(
-        "[%s] ✓ Phase A terminée — %d questions, score IA : %g/%g pts → %.2f/20 — en attente de validation enseignant",
+        "[%s] ✓ Correction terminée — %d questions, score IA : %g/%g pts → %.2f/20 — en attente de validation enseignant",
         copy_id, len(result.grade.questions),
         result.grade.total_score, _denom, _score_20,
     )
     return result
+
+
+def run_phase_a(
+    *,
+    copy_id: str,
+    student_name: str = "",
+    file_paths: list[Path],
+    rubric: Rubric,
+    rubric_file_path: Path | None = None,
+    subject_text: str = "",
+    subject_file_path: Path | None = None,
+    expert_instructions: str = "",
+    bareme_id: str = "",
+    official_answers: str = "",
+    runs_dir: Path | None = None,
+    on_progress: Callable[[str, int], None] | None = None,
+) -> PipelineResult:
+    """
+    Phase A complète : transcription → correction IA, sans arrêt intermédiaire.
+    Utilisé par le mode Batch, qui ne propose pas d'écran de relecture de la
+    transcription (trop coûteux en temps enseignant sur un lot de copies).
+    Le mode Copie Unique appelle run_transcription() puis run_grading()
+    séparément, avec l'écran de relecture enseignant entre les deux.
+    """
+    result = run_transcription(
+        copy_id=copy_id,
+        student_name=student_name,
+        file_paths=file_paths,
+        rubric=rubric,
+        rubric_file_path=rubric_file_path,
+        subject_text=subject_text,
+        subject_file_path=subject_file_path,
+        expert_instructions=expert_instructions,
+        bareme_id=bareme_id,
+        official_answers=official_answers,
+        runs_dir=runs_dir,
+        on_progress=on_progress,
+    )
+    if result.errors or result.transcription is None:
+        return result
+    return run_grading(result=result, on_progress=on_progress)
 
 
 # ── Phase B — RAG → diagnostic → remédiation → export ─────────────────────────
@@ -596,8 +702,10 @@ def run_single_copy(
     on_progress: Callable[[str, int], None] | None = None,
 ) -> PipelineResult:
     """
-    Wrapper pour le mode batch : enchaîne Phase A + validation automatique (tout accepté) + Phase B.
-    En mode interactif (traitement unique), utiliser run_phase_a() puis run_phase_b() séparément.
+    Wrapper pour le mode batch : enchaîne Phase A (sans relecture transcription)
+    + validation automatique (tout accepté) + Phase B.
+    En mode interactif (traitement unique), utiliser run_transcription() → écran de
+    relecture → run_grading() → tableau de validation → run_phase_b() séparément.
     """
     result = run_phase_a(
         copy_id=copy_id,

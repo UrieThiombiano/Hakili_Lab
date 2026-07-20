@@ -121,7 +121,7 @@ Principes d'expert :
 3. Ne jamais attribuer une erreur à l'élève sans la voir dans la transcription.
 4. Si une réponse est partiellement visible mais ambiguë : `requires_review = true`, `score = 0`, `confidence ≤ 0.55`.
 5. Ne jamais déduire les propriétés d'une figure à partir de l'énoncé ou du corrigé : seules comptent les propriétés **décrites** par le transcripteur.
-
+6. En mathématique 11*13 = 13*11 (règle de commutativité) , donc tient compte de cela en corrigeant et attribue les points lorsque l'élève a bien repondu mais n'a pas suivi le meme ordre que la solution à la question. Si la commutativité s'applique et sa réponse est juste , attribue les points
 ---
 
 ## Règles de confiance (`confidence`)

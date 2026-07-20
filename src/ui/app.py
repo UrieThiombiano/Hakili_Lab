@@ -505,6 +505,39 @@ def _mt(s: str) -> str:
     )
 
 
+# ── Relecture transcription — marqueurs de confiance (3 niveaux) ──────────────
+# ⟦texte⟧ = incertain (orange) — [ILLISIBLE] = illisible (rouge) — reste = confiant (pas de marquage).
+# Convention posée dans prompts/transcription_prompt.md.
+
+_UNCERTAIN_RE = re.compile(r"⟦([^⟧]*)⟧|(\[ILLISIBLE\])")
+
+
+def _render_transcription_html(content: str) -> str:
+    """Transforme le texte transcrit (avec marqueurs) en HTML surligné à
+    3 niveaux, pour affichage en lecture seule à côté de l'image de la page."""
+    parts: list[str] = []
+    last = 0
+    for m in _UNCERTAIN_RE.finditer(content):
+        if m.start() > last:
+            parts.append(_mh(content[last:m.start()]))
+        if m.group(1) is not None:
+            parts.append(f'<span class="trans-uncertain">{_mh(m.group(1))}</span>')
+        else:
+            parts.append(f'<span class="trans-illisible">{_mh(m.group(2))}</span>')
+        last = m.end()
+    if last < len(content):
+        parts.append(_mh(content[last:]))
+    return "".join(parts).replace("\n", "<br>")
+
+
+def _strip_transcription_markers(content: str) -> str:
+    """Retire les marqueurs ⟦…⟧ (garde le texte contenu) pour obtenir le texte
+    brut éditable par l'enseignant — [ILLISIBLE] reste tel quel."""
+    return _UNCERTAIN_RE.sub(
+        lambda m: m.group(1) if m.group(1) is not None else m.group(2), content
+    )
+
+
 # ── Prévisualisation PDF ──────────────────────────────────────────────────────
 # Rendu des pages en PNG via PyMuPDF (déjà dépendance de l'ingestion) :
 # 100 % fiable dans Streamlit, contrairement aux <iframe> data: que Chrome
@@ -564,6 +597,88 @@ def _render_diag_overview(diag) -> str:
             parts.append(f'<div class="diag-item lacunes-item">{_mh(w)}</div>')
         parts.append('</div>')
     return "".join(parts)
+
+
+def render_transcription_review(transcription, ingestion, key_prefix: str = "") -> None:
+    """
+    Écran de relecture transcription — étape 1 de la Phase A.
+    Pour chaque page : image de la copie à gauche, transcription surlignée
+    à 3 niveaux (confiant / incertain / illisible) + zone éditable à droite.
+    Stocke les éditions dans st.session_state["transcription_edits"]
+    ({page_number: {"raw": texte_original_avec_marqueurs, "edited": texte_enseignant}}).
+    """
+    if "transcription_edits" not in st.session_state:
+        st.session_state["transcription_edits"] = {}
+
+    st.markdown("""
+    <style>
+    .trans-uncertain {
+        background:#fdf0d8; color:#8a5a00; border-radius:3px; padding:0 2px;
+    }
+    .trans-illisible {
+        background:#fbe0dd; color:#c0392b; border-radius:3px; padding:0 2px; font-weight:600;
+    }
+    .trans-page-box {
+        border:1px solid #e8eef8; border-radius:8px; padding:14px 16px;
+        background:#fbfcfe; font-size:13.5px; line-height:1.7; min-height:140px;
+    }
+    .trans-legend span { margin-right:16px; font-size:11.5px; color:#5a7290; }
+    </style>
+    <div class="trans-legend">
+        <span><span class="trans-uncertain">&nbsp;texte&nbsp;</span> incertain</span>
+        <span><span class="trans-illisible">&nbsp;texte&nbsp;</span> illisible</span>
+        <span>texte normal = lecture confiante</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    edits = st.session_state["transcription_edits"]
+    page_images = {i + 1: p for i, p in enumerate(ingestion.pages)} if ingestion else {}
+
+    for page in transcription.pages:
+        idx = page.page_number
+        st.markdown(f"##### Page {idx}")
+        col_img, col_txt = st.columns([1, 1], gap="large")
+
+        with col_img:
+            img_path = page_images.get(idx)
+            if img_path and Path(img_path).exists():
+                st.image(str(img_path), width="stretch")
+            else:
+                st.caption("Image indisponible")
+
+        with col_txt:
+            raw_content = edits.get(idx, {}).get("raw", page.content)
+            st.markdown(
+                f'<div class="trans-page-box">{_render_transcription_html(raw_content)}</div>',
+                unsafe_allow_html=True,
+            )
+            default_edit = edits.get(idx, {}).get("edited", _strip_transcription_markers(raw_content))
+            edited = st.text_area(
+                f"Transcription page {idx}",
+                value=default_edit,
+                height=220,
+                key=f"{key_prefix}trans_edit_{idx}",
+                label_visibility="collapsed",
+                help="Corrigez directement le texte si la transcription IA s'est trompée.",
+            )
+            edits[idx] = {"raw": raw_content, "edited": edited}
+
+        if page.uncertainties:
+            with st.expander(f"⚠ {len(page.uncertainties)} zone(s) signalée(s) — page {idx}"):
+                for u in page.uncertainties:
+                    st.markdown(f"- {_mh(u)}")
+
+        st.divider()
+
+    st.session_state["transcription_edits"] = edits
+
+
+def _apply_transcription_edits(transcription, edits: dict) -> None:
+    """Réécrit transcription.pages[i].content avec le texte validé par l'enseignant."""
+    for page in transcription.pages:
+        e = edits.get(page.page_number)
+        if e is not None:
+            page.content = e["edited"]
 
 
 def render_validation_table(grade, rubric=None) -> None:
@@ -1049,26 +1164,30 @@ elif page == "TRAITEMENT UNIQUE":
 
     st.divider()
 
-    # ── Session state Phase A / B ─────────────────────────────────────────────
+    # ── Session state Étape 1 (transcription) / Étape 2 (correction) / Phase B ─
+    if "single_transcription" not in st.session_state:
+        st.session_state.single_transcription = None  # PipelineResult après run_transcription
     if "single_phase_a" not in st.session_state:
-        st.session_state.single_phase_a = None   # PipelineResult Phase A
+        st.session_state.single_phase_a = None   # PipelineResult après run_grading
     if "single_result" not in st.session_state:
         st.session_state.single_result = None    # PipelineResult Phase B (final)
 
-    # ── Bouton Phase A ────────────────────────────────────────────────────────
-    if st.button("Lancer la correction IA", use_container_width=False):
+    # ── Bouton Étape 1 — Transcription ────────────────────────────────────────
+    if st.button("Lancer la transcription", use_container_width=False):
         if not copy_files:
             st.error("Veuillez charger la copie de l'élève (PDF ou photo(s)).")
         elif len(copy_files) > 1 and any(f.name.lower().endswith(".pdf") for f in copy_files):
             st.error("Impossible de mélanger un PDF avec des images. Chargez soit 1 PDF, soit plusieurs images.")
         else:
+            st.session_state.single_transcription = None
             st.session_state.single_phase_a = None
             st.session_state.single_result  = None
             st.session_state["teacher_decisions"] = {}
+            st.session_state["transcription_edits"] = {}
             try:
                 from src.core.anonymizer import make_copy_id
                 from src.core.config import settings
-                from src.pipeline.pipeline import run_phase_a
+                from src.pipeline.pipeline import run_transcription
                 from src.ui.progress import PipelineProgressUI
 
                 runs_dir = Path(settings.runs_dir)
@@ -1111,7 +1230,7 @@ elif page == "TRAITEMENT UNIQUE":
                         _save_upload(subject_file, sp)
                         subject_file_path = sp
 
-                    phase_a_result = run_phase_a(
+                    transcription_result = run_transcription(
                         copy_id=copy_id,
                         student_name=student_name,
                         file_paths=saved_paths,
@@ -1127,7 +1246,7 @@ elif page == "TRAITEMENT UNIQUE":
                     )
 
                 progress_ui.clear()
-                st.session_state.single_phase_a = phase_a_result
+                st.session_state.single_transcription = transcription_result
                 st.rerun()
 
             except Exception as e:
@@ -1135,7 +1254,75 @@ elif page == "TRAITEMENT UNIQUE":
                     progress_ui.clear()
                 _show_failure(str(e))
 
-    # ── Tableau de validation (après Phase A) ─────────────────────────────────
+    # ── Écran de relecture transcription (après Étape 1) ──────────────────────
+    if (
+        st.session_state.single_transcription is not None
+        and st.session_state.single_phase_a is None
+        and st.session_state.single_result is None
+    ):
+        trans_result = st.session_state.single_transcription
+
+        if trans_result.errors:
+            _show_failure("; ".join(trans_result.errors))
+        elif trans_result.transcription is not None:
+            st.divider()
+            st.markdown("""
+            <div style="background:#001e4a;color:#fff;padding:12px 16px;border-radius:6px;
+                        margin-bottom:16px;font-size:13px;font-weight:600;">
+                Étape 1 — Relecture de la transcription
+                <span style="font-size:11px;font-weight:400;margin-left:10px;color:#a0c0e8;">
+                    Corrigez les zones incertaines ou illisibles avant la correction IA
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            render_transcription_review(
+                trans_result.transcription,
+                trans_result.ingestion,
+            )
+
+            st.markdown("")
+            if st.button(
+                "Valider la transcription et lancer la correction →",
+                use_container_width=False,
+                type="primary",
+            ):
+                from src.pipeline.pipeline import run_grading
+                from src.ui.progress import PipelineProgressUI
+
+                edits = st.session_state.get("transcription_edits", {})
+                _apply_transcription_edits(trans_result.transcription, edits)
+
+                _logo_path = Path(__file__).parent / "hakili_logo.png"
+                _logo_b64 = (
+                    base64.b64encode(_logo_path.read_bytes()).decode("utf-8")
+                    if _logo_path.exists() else ""
+                )
+                progress_ui = PipelineProgressUI(
+                    logo_b64=_logo_b64,
+                    test_label=hakili_test.label if hakili_test else "Correction libre",
+                    student_name=trans_result.student_name,
+                )
+
+                try:
+                    grading_result = run_grading(
+                        result=trans_result,
+                        on_progress=progress_ui.update,
+                    )
+                except Exception as _e_g:
+                    progress_ui.clear()
+                    _show_failure(str(_e_g))
+                    st.stop()
+
+                progress_ui.clear()
+                if grading_result.errors:
+                    _show_failure("; ".join(grading_result.errors))
+                    st.stop()
+                st.session_state.single_phase_a = grading_result
+                st.session_state.single_transcription = None
+                st.rerun()
+
+    # ── Tableau de validation (après Étape 2 — correction) ────────────────────
     if st.session_state.single_phase_a is not None and st.session_state.single_result is None:
         phase_a = st.session_state.single_phase_a
 
