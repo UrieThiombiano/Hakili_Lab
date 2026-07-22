@@ -1,8 +1,12 @@
 import base64
+import html
 import logging
+import logging.handlers
 import re
 import sys
 import tempfile
+import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 # Assure que la racine du projet est dans le path (nécessaire sur Windows)
@@ -31,21 +35,61 @@ def _purge_stale_src_modules() -> None:
 if __name__ == "__main__":
     _purge_stale_src_modules()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-    stream=sys.stdout,
-)
+def _configure_logging() -> None:
+    """Configure le logger racine : sortie console (stdout) + fichier tournant
+    par jour dans logs/. Streamlit ré-exécute ce script en entier à chaque
+    interaction utilisateur, mais dans le MÊME processus Python — le logger
+    racine garde donc d'un rerun à l'autre les handlers déjà ajoutés. On les
+    marque et on vérifie leur présence avant d'en ajouter de nouveaux, sinon
+    chaque rerun dupliquerait un handler et donc chaque ligne écrite."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    existing_ids = {getattr(h, "_hakili_handler_id", None) for h in root.handlers}
+    formatter = logging.Formatter(
+        "%(asctime)s  %(levelname)-8s  %(name)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    if "console" not in existing_ids:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(formatter)
+        console_handler._hakili_handler_id = "console"
+        root.addHandler(console_handler)
+
+    if "file" not in existing_ids:
+        logs_dir = Path(__file__).resolve().parent.parent.parent / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.handlers.TimedRotatingFileHandler(
+            logs_dir / "hakili.log",
+            when="midnight",
+            backupCount=30,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        file_handler._hakili_handler_id = "file"
+        root.addHandler(file_handler)
+
+
+_configure_logging()
 
 import streamlit as st
 
+from src.core.tendance import calculer_tendance
+from src.db.database import SessionLocal
+from src.db.models import Copie, UserRole
+from src.integrations.google_sheets import get_eleve_by_identifiant
 from src.pipeline.math_format import (
     ascii_math_upgrade,
     humanize_ids_in_text,
     math_to_html,
 )
 from src.pipeline.text_structuring import series_title, split_question
+from src.services.auth_service import authentifier
+from src.services.copie_service import (
+    get_copies_pour_identifiants,
+    get_documents_for_copie,
+    get_historique_eleve,
+)
+from src.services.user_service import can_access_eleve, get_accessible_eleves
 
 st.set_page_config(
     page_title="Hakili Lab — Correction IA",
@@ -348,6 +392,74 @@ section[data-testid="stSidebar"] {
 .forces-item { border-color: #27ae60; background: #f7fdf9; }
 .lacunes-item { border-color: #e67e22; background: #fffaf5; }
 .diag-item:last-child { border-radius: 0 0 4px 0; }
+
+/* ── Dashboard Admin — cartes élève ─────────────────────────────────── */
+.eleve-card {
+    background: #f7fafd;
+    border: 1px solid #dde8f5;
+    border-left: 4px solid #001e4a;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 10px 0 6px 0;
+}
+.eleve-card h5 { margin: 0 0 4px 0; font-size: 14px; font-weight: 700; color: #001e4a; }
+.eleve-card .eleve-id {
+    font-size: 11px; color: #7090b8; font-family: monospace; margin-bottom: 8px;
+}
+.eleve-card .eleve-meta { font-size: 12.5px; color: #2c3e50; }
+.eleve-tag {
+    display: inline-block; background: #e6edf8; color: #2d5a8e;
+    padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+    margin-right: 6px;
+}
+.eleve-card-header {
+    display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.eleve-card-header h5 { margin: 0; }
+.tendance-badge {
+    display: inline-block; padding: 3px 12px; border-radius: 20px;
+    font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.tendance-vert   { background: #eaf7ef; color: #1a7a42; }
+.tendance-orange { background: #fff3e8; color: #9a4500; }
+.tendance-rouge  { background: #fdecea; color: #c0392b; }
+.tendance-gris   { background: #eef1f4; color: #5a6b7a; }
+
+/* ── Suivi — copies & évolution ──────────────────────────────────────── */
+.copie-card {
+    background: #fafcff;
+    border: 1px solid #e3ecf7;
+    border-radius: 8px;
+    padding: 12px 16px 8px 16px;
+    margin: 12px 0 4px 0;
+}
+.copie-card .copie-title { font-weight: 700; color: #001e4a; font-size: 13px; margin: 0; }
+.copie-card .copie-meta { font-size: 12px; color: #7090b8; margin: 3px 0 0 0; }
+.note-good { color: #1a7a42; font-weight: 700; }
+.note-pending { color: #9a4500; font-weight: 700; }
+.evol-row { margin: 12px 0; font-size: 13px; }
+.evol-row .evol-label { font-weight: 600; color: #001e4a; }
+.evol-track {
+    background: #e8eef7; border-radius: 4px; height: 18px;
+    overflow: hidden; margin: 5px 0 3px 0;
+}
+.evol-fill { height: 100%; background: #27ae60; }
+.evol-value { color: #1a7a42; font-weight: 700; font-size: 12.5px; }
+.evol-empty { color: #9a4500; font-size: 12.5px; }
+.admin-danger-zone {
+    border-left: 3px solid #e67e22;
+    background: #fffaf5;
+    padding: 10px 14px;
+    border-radius: 0 5px 5px 0;
+    margin: 12px 0;
+}
+
+/* Un champ password Streamlit affiche déjà son propre bouton œil
+   afficher/masquer ; certains navigateurs (Edge notamment) ajoutent EN PLUS
+   leur propre icône native sur <input type="password">, d'où le doublon —
+   on masque celle du navigateur pour ne garder que celle de Streamlit. */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -372,11 +484,12 @@ with st.sidebar:
 
     page = st.radio(
         "MENU",
-        options=["À PROPOS", "TRAITEMENT UNIQUE", "TRAITEMENT BATCH"],
+        options=["À PROPOS", "TRAITEMENT UNIQUE", "TRAITEMENT BATCH", "GESTION"],
         format_func=lambda x: {
             "À PROPOS": "À propos",
             "TRAITEMENT UNIQUE": "Analyser une copie",
             "TRAITEMENT BATCH": "Session de classe",
+            "GESTION": "Gestion",
         }.get(x, x),
     )
 
@@ -709,7 +822,7 @@ def _apply_teacher_decisions(grade, decisions: dict) -> None:
     grade.compute_final_score()
 
 
-def _display_results(result, key_prefix: str = "") -> None:
+def _display_results(result, key_prefix: str = "", eleve: dict | None = None) -> None:
     if not result.success:
         _show_failure("; ".join(result.errors))
         return
@@ -852,17 +965,27 @@ def _display_results(result, key_prefix: str = "") -> None:
     # ── Téléchargements ───────────────────────────────────────────────────────
     st.markdown("#### Téléchargements")
     kid = key_prefix or result.copy_id
-    name_slug = (
-        result.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
-        if result.student_name else result.copy_id
-    )
+    if eleve:
+        def _stem(doc_type: str) -> str:
+            return nom_fichier_document(
+                nom=eleve.get("nom", ""), prenom=eleve.get("prenom", ""),
+                doc_type=doc_type, date=datetime.now().date(),
+            )
+    else:
+        _fallback_slug = (
+            result.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
+            if result.student_name else result.copy_id
+        )
+        def _stem(doc_type: str) -> str:
+            return f"{doc_type}_{_fallback_slug}"
+
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         if result.pdf_path and result.pdf_path.exists():
             st.download_button(
                 "Rapport complet — Enseignant",
                 data=result.pdf_path.read_bytes(),
-                file_name=f"rapport_correction_{name_slug}.pdf",
+                file_name=f"{_stem('rapport')}.pdf",
                 mime="application/pdf",
                 key=f"dl_pdf_{kid}",
                 use_container_width=True,
@@ -873,7 +996,7 @@ def _display_results(result, key_prefix: str = "") -> None:
             st.download_button(
                 "Exercices de progression — Élève",
                 data=result.remediation_pdf_path.read_bytes(),
-                file_name=f"sujet_remediation_{name_slug}.pdf",
+                file_name=f"{_stem('remediation')}.pdf",
                 mime="application/pdf",
                 key=f"dl_rem_{kid}",
                 use_container_width=True,
@@ -881,6 +1004,735 @@ def _display_results(result, key_prefix: str = "") -> None:
             _pdf_preview_expander(result.remediation_pdf_path, key=f"prev_rem_{kid}")
         elif not (result.remediation_subject and result.remediation_subject.exercises):
             st.caption("Exercices de progression non disponibles pour cette copie")
+
+
+_DOC_TYPES_ORDRE = ["scan", "rapport", "remediation"]
+_DOC_TYPE_LABELS = {"scan": "Scan", "rapport": "Rapport", "remediation": "Remédiation"}
+
+
+def _sniff_mime_and_ext(data: bytes) -> tuple[str, str]:
+    """Détecte le type réel d'un document stocké en base à partir de ses premiers
+    octets. Le scan peut être un PDF ou une photo JPG/PNG selon l'upload d'origine
+    — contrairement au rapport et à la remédiation, toujours générés en PDF."""
+    if data[:4] == b"%PDF":
+        return "application/pdf", "pdf"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg", "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png", "png"
+    return "application/octet-stream", "bin"
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def _doc_pdf_pages_png(data: bytes, zoom: float = 1.4) -> list[bytes]:
+    """Rend chaque page d'un PDF (bytes) en PNG — variante bytes de _pdf_pages_png,
+    nécessaire ici car les documents viennent de la base (BYTEA), pas d'un fichier."""
+    import fitz  # PyMuPDF
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        mat = fitz.Matrix(zoom, zoom)
+        return [page.get_pixmap(matrix=mat).tobytes("png") for page in doc]
+    finally:
+        doc.close()
+
+
+def _doc_preview(data: bytes, mime: str) -> None:
+    """Aperçu d'un document : pages PDF rendues en image, ou image affichée telle
+    quelle. Un aperçu qui échoue (lib de rendu absente/cassée, fichier corrompu)
+    affiche un message et n'interrompt jamais le reste de la page — seul le
+    téléchargement (déjà proposé à côté) reste garanti."""
+    if mime == "application/pdf":
+        try:
+            pages = _doc_pdf_pages_png(data)
+        except Exception as exc:
+            st.warning(f"Aperçu indisponible : {exc}")
+            return
+        for i, png in enumerate(pages, 1):
+            st.image(png, caption=f"Page {i} / {len(pages)}", width="stretch")
+    elif mime.startswith("image/"):
+        try:
+            st.image(data, width="stretch")
+        except Exception as exc:
+            st.warning(f"Aperçu indisponible : {exc}")
+    else:
+        st.caption("Aperçu non disponible pour ce type de fichier.")
+
+
+def _afficher_documents_copie(copie, db) -> None:
+    """Affiche les documents (scan/rapport/remédiation) d'une copie avec boutons
+    de téléchargement et d'aperçu — dans l'ordre scan → rapport → remédiation."""
+    documents = get_documents_for_copie(db, copie.copy_id)
+    docs_by_type = {doc.type: doc for doc in documents}
+
+    # Identité lisible pour le nom de fichier (voir nom_fichier_document) —
+    # élève introuvable OU Sheets injoignables (coupure réseau, cas rare
+    # ici) : on retombe sur copy_id plutôt que de bloquer le téléchargement.
+    from src.integrations.google_sheets import GoogleSheetsError
+    try:
+        eleve_pour_fichier = get_eleve_by_identifiant(copie.identifiant_hakili)
+    except GoogleSheetsError:
+        eleve_pour_fichier = None
+
+    st.write("**Documents :**")
+    for doc_type in _DOC_TYPES_ORDRE:
+        label = _DOC_TYPE_LABELS[doc_type]
+        doc = docs_by_type.get(doc_type)
+        col_label, col_dl, col_prev = st.columns([1, 1.3, 1.3])
+        with col_label:
+            st.write(label)
+        if doc is None:
+            with col_dl:
+                st.caption("Non disponible")
+            continue
+
+        mime, ext = _sniff_mime_and_ext(doc.fichier)
+        if eleve_pour_fichier:
+            stem = nom_fichier_document(
+                nom=eleve_pour_fichier.get("nom", ""), prenom=eleve_pour_fichier.get("prenom", ""),
+                doc_type=doc_type, date=copie.date_soumission,
+            )
+        else:
+            stem = f"{copie.copy_id}_{doc_type}"
+        with col_dl:
+            st.download_button(
+                label="Télécharger",
+                data=doc.fichier,
+                file_name=f"{stem}.{ext}",
+                mime=mime,
+                key=f"download_{copie.copy_id}_{doc_type}",
+            )
+        with col_prev:
+            show_preview = st.toggle("Aperçu", key=f"preview_{copie.copy_id}_{doc_type}")
+        if show_preview:
+            _doc_preview(doc.fichier, mime)
+
+
+def afficher_historique(eleve: dict, db) -> None:
+    """Affiche l'historique complet d'un élève (copies soumises + notes + documents).
+
+    eleve : dict issu des Google Sheets (voir src.integrations.google_sheets.
+    get_eleve_by_identifiant) — identité (nom, prénom, centre, classe) vient
+    du Sheet. contact_parents ET identifiant_hakili ne sont JAMAIS affichés
+    ici (donnée personnelle / technique) — seule exception : le tableau
+    élèves de l'admin (voir _admin_view_stats/dispatch GESTION)."""
+    nom_complet = html.escape(f"{eleve['prenom']} {eleve['nom']}")
+    st.markdown(f"""
+    <div class="eleve-card">
+        <h5>{nom_complet}</h5>
+        <div class="eleve-meta">
+            <span class="eleve-tag">{html.escape(eleve.get('centre') or '?')}</span>
+            <span class="eleve-tag">{html.escape(eleve.get('classe') or '?')}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    historique = get_historique_eleve(db, eleve["identifiant_hakili"])
+
+    if historique:
+        st.subheader("Copies soumises")
+        for copie in historique:
+            if copie.notes_finales is not None:
+                note_html = f'<span class="note-good">{copie.notes_finales:.1f}/20</span>'
+            else:
+                note_html = '<span class="note-pending">Non notée</span>'
+
+            st.markdown(f"""
+            <div class="copie-card">
+                <p class="copie-title">
+                    {html.escape(copie.classe)} &middot; {html.escape(copie.annee_scolaire)}
+                </p>
+                <p class="copie-meta">{copie.date_soumission} &middot; {note_html}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            _afficher_documents_copie(copie, db)
+    else:
+        st.info("Aucune copie pour cet élève")
+
+
+def _render_comparaison_view(db, user, eleves: list[dict]) -> None:
+    """Affiche l'évolution chronologique des notes d'un élève, copie par copie
+    triée par date_soumission croissante — pas de regroupement par année
+    scolaire (centre à tests continus, le découpage en années n'a pas de sens).
+
+    `eleves` : élèves ACCESSIBLES à l'utilisateur connecté (déjà filtrés par
+    get_accessible_eleves selon son rôle/casquette) — la sélection par nom
+    ne propose jamais un élève hors de ce périmètre. L'identifiant_hakili
+    n'est jamais affiché, seulement utilisé en coulisse pour charger
+    l'historique (voir _selectbox_recherchable)."""
+    st.subheader("Comparaison évolution")
+
+    eleve_comp = _selectbox_recherchable(
+        "Élève", eleves,
+        format_func=lambda e: f"{e.get('prenom', '')} {e.get('nom', '')}",
+        key="comparaison_eleve_select",
+        placeholder="Sélectionner un élève",
+    )
+    if eleve_comp is None:
+        return
+
+    if not can_access_eleve(db, user, eleve_comp):
+        st.error("Vous n'avez pas accès à cet élève")
+        return
+
+    historique = get_historique_eleve(db, eleve_comp["identifiant_hakili"])
+
+    if not historique:
+        st.info("Aucune copie pour cet élève")
+        return
+
+    chronologie = sorted(historique, key=lambda c: c.date_soumission)
+
+    nom_complet = html.escape(f"{eleve_comp['prenom']} {eleve_comp['nom']}")
+    st.markdown(f"""
+    <div class="eleve-card">
+        <h5>{nom_complet} — Évolution</h5>
+    """, unsafe_allow_html=True)
+
+    classe_precedente: str | None = None
+    for copie in chronologie:
+        classe_label = html.escape(copie.classe)
+
+        changement_html = ""
+        if classe_precedente is not None and classe_precedente != copie.classe:
+            changement_html = (
+                f'<span class="eleve-tag">Changement de classe : '
+                f'{html.escape(classe_precedente)} → {classe_label}</span>'
+            )
+        classe_precedente = copie.classe
+
+        if copie.notes_finales is not None:
+            pct = max(0, min(100, int((copie.notes_finales / 20) * 100)))
+            note_html = (
+                f'<div class="evol-track"><div class="evol-fill" style="width:{pct}%;"></div></div>'
+                f'<span class="evol-value">{copie.notes_finales:.1f}/20</span>'
+            )
+        else:
+            note_html = '<div class="evol-empty">Non notée</div>'
+
+        row_html = (
+            f'<div class="evol-row">'
+            f'<span class="evol-label">{copie.date_soumission}</span> — {classe_label}'
+            f'{changement_html}'
+            f'{note_html}'
+            f'</div>'
+        )
+        st.markdown(row_html, unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# Libellé + classe CSS par tendance (voir src.core.tendance.calculer_tendance).
+_TENDANCE_STYLE: dict[str, tuple[str, str]] = {
+    "progresse": ("tendance-vert", "Progresse"),
+    "stagne": ("tendance-orange", "Stagne"),
+    "regresse": ("tendance-rouge", "Régresse"),
+    "insuffisant": ("tendance-gris", "Pas assez de données"),
+}
+
+# Priorité d'affichage : un responsable doit voir en premier qui décroche.
+_ORDRE_TENDANCE: dict[str, int] = {"regresse": 0, "stagne": 1, "progresse": 2, "insuffisant": 3}
+
+
+def _render_tableau_responsable(db, eleves: list[dict]) -> None:
+    """Tableau de suivi pour un responsable de centre : identité (Sheets) +
+    pastille de tendance calculée sur les deux dernières copies notées de
+    chaque élève (voir src.core.tendance.calculer_tendance).
+
+    Performance : les copies de TOUS les élèves du centre sont chargées en
+    UNE seule requête groupée (get_copies_pour_identifiants), pas une
+    requête par élève — un centre à plusieurs dizaines d'élèves ferait
+    sinon autant de requêtes que d'élèves.
+
+    contact_parents n'est jamais lu ici : les dicts élèves de
+    get_accessible_eleves() le portent, mais on ne prend que nom, prénom,
+    classe, école, centre, identifiant_hakili."""
+    identifiants = [e["identifiant_hakili"] for e in eleves]
+    copies_par_identifiant = get_copies_pour_identifiants(db, identifiants)
+
+    lignes: list[tuple[dict, str]] = []
+    nb_en_baisse = 0
+    for eleve in eleves:
+        copies = copies_par_identifiant.get(eleve["identifiant_hakili"], [])
+        tendance = calculer_tendance(copies)
+        if tendance == "regresse":
+            nb_en_baisse += 1
+        lignes.append((eleve, tendance))
+
+    if nb_en_baisse:
+        st.warning(f"{nb_en_baisse} élève(s) en baisse — à regarder en priorité.")
+    else:
+        st.success("Aucun élève en baisse actuellement.")
+
+    recherche = st.text_input(
+        "Rechercher un élève",
+        key="responsable_recherche",
+        placeholder="Rechercher par nom ou prénom...",
+    )
+    if recherche.strip():
+        lignes = [
+            (eleve, tendance) for eleve, tendance in lignes
+            if _correspond_recherche(recherche, f"{eleve.get('prenom', '')} {eleve.get('nom', '')}")
+        ]
+
+    st.write(f"**{len(lignes)} élève(s)** affiché(s) sur {len(eleves)} accessible(s)")
+
+    # Élèves en baisse en premier, puis stagne, progresse, et enfin
+    # insuffisant (rien à signaler) — ordre alphabétique à égalité.
+    lignes.sort(key=lambda paire: (_ORDRE_TENDANCE[paire[1]], paire[0].get("nom") or ""))
+
+    for eleve, tendance in lignes:
+        css_class, libelle = _TENDANCE_STYLE[tendance]
+        nom_complet = html.escape(f"{eleve.get('prenom', '')} {eleve.get('nom', '')}")
+        classe = html.escape(eleve.get("classe") or "?")
+        ecole = html.escape(eleve.get("ecole") or "?")
+        centre = html.escape(eleve.get("centre") or "?")
+
+        st.markdown(f"""
+        <div class="eleve-card">
+            <div class="eleve-card-header">
+                <h5>{nom_complet}</h5>
+                <span class="tendance-badge {css_class}">{libelle}</span>
+            </div>
+            <div class="eleve-meta">
+                <span class="eleve-tag">{classe}</span>
+                <span class="eleve-tag">{centre}</span>
+                {ecole}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _render_profil_enseignant(db, user: dict, eleves: list[dict]) -> None:
+    """Vue individuelle enseignant : liste déroulante restreinte à ses
+    élèves (get_accessible_eleves — déjà filtrée centre + classe), puis
+    profil complet d'UN élève choisi : identité Sheets, pastille de
+    tendance (même style que la vue responsable — calculer_tendance et
+    _TENDANCE_STYLE réutilisés tels quels, aucune logique dupliquée),
+    résumé chiffré, et copies/documents en ordre chronologique.
+
+    Sécurité : la liste déroulante ne propose déjà que des élèves
+    autorisés, mais on revérifie can_access_eleve() avant d'afficher quoi
+    que ce soit — jamais confiance uniquement au filtrage côté UI."""
+    eleve = _selectbox_recherchable(
+        "Élève", eleves,
+        format_func=lambda e: f"{e.get('prenom', '')} {e.get('nom', '')}",
+        key="enseignant_eleve_select",
+        placeholder="Sélectionner un élève",
+    )
+    if eleve is None:
+        return
+
+    if not can_access_eleve(db, user, eleve):
+        st.error("Vous n'avez pas accès à cet élève.")
+        return
+
+    # Une seule requête : sert à la fois au calcul de tendance, au résumé
+    # chiffré et à la liste chronologique ci-dessous.
+    historique = get_historique_eleve(db, eleve["identifiant_hakili"])
+    tendance = calculer_tendance(historique)
+    css_class, libelle = _TENDANCE_STYLE[tendance]
+
+    nom_complet = html.escape(f"{eleve.get('prenom', '')} {eleve.get('nom', '')}")
+    classe = html.escape(eleve.get("classe") or "?")
+    ecole = html.escape(eleve.get("ecole") or "?")
+    centre = html.escape(eleve.get("centre") or "?")
+    reprend = html.escape(str(eleve.get("reprend_la_classe") or "?"))
+    boursier = html.escape(str(eleve.get("boursier") or "?"))
+
+    st.markdown(f"""
+    <div class="eleve-card">
+        <div class="eleve-card-header">
+            <h5>{nom_complet}</h5>
+            <span class="tendance-badge {css_class}">{libelle}</span>
+        </div>
+        <div class="eleve-meta">
+            <span class="eleve-tag">{classe}</span>
+            <span class="eleve-tag">{centre}</span>
+            {ecole}
+        </div>
+        <div class="eleve-meta" style="margin-top:6px;">
+            Reprend la classe : {reprend} &middot; Boursier : {boursier}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    nb_copies = len(historique)
+    derniere_copie = historique[0] if historique else None  # déjà trié desc
+    date_derniere_copie_txt = str(derniere_copie.date_soumission) if derniere_copie else "—"
+    derniere_notee = next((c for c in historique if c.notes_finales is not None), None)
+    derniere_note_txt = f"{derniere_notee.notes_finales:.1f}/20" if derniere_notee else "Non notée"
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Copies soumises", nb_copies)
+    with col2:
+        st.metric("Dernière note", derniere_note_txt)
+    with col3:
+        st.metric("Date dernière copie", date_derniere_copie_txt)
+
+    st.divider()
+
+    if not historique:
+        st.info("Aucune copie pour cet élève.")
+        return
+
+    st.subheader("Copies soumises")
+    # Ordre chronologique croissant — même convention que l'onglet
+    # Comparaison (on suit le fil du temps, pas de regroupement par année).
+    chronologie = sorted(historique, key=lambda c: c.date_soumission)
+    for copie in chronologie:
+        if copie.notes_finales is not None:
+            note_html = f'<span class="note-good">{copie.notes_finales:.1f}/20</span>'
+        else:
+            note_html = '<span class="note-pending">Non notée</span>'
+
+        st.markdown(f"""
+        <div class="copie-card">
+            <p class="copie-title">{html.escape(copie.classe)} &middot; {copie.date_soumission}</p>
+            <p class="copie-meta">{note_html}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        _afficher_documents_copie(copie, db)
+
+
+# ── Helpers — Dashboard Admin ───────────────────────────────────────────────
+
+def _admin_view_stats(db) -> None:
+    """Vue Statistiques — accessible uniquement depuis l'onglet Admin (is_admin),
+    voir tab_admin plus bas. Affiche le personnel par centre (noms), TOUT le
+    personnel y compris sans PIN (mention discrète) : ne jamais appeler
+    cette fonction depuis l'onglet Suivi (responsables/enseignants).
+
+    Élèves ET personnel viennent tous les deux des Google Sheets — plus
+    aucune lecture Centre/Utilisateur/Credentials ici, ces tables n'existent
+    plus. Les centres affichés sont DÉRIVÉS dynamiquement des Sheets (voir
+    get_centres_derives) — plus de liste figée : un centre avec plusieurs
+    personnes apparaît automatiquement, sans toucher au code."""
+    st.markdown("**Statistiques**")
+
+    from src.integrations.google_sheets import GoogleSheetsError, get_centres_derives, get_eleves, get_personnel
+
+    eleves = _lire_sheets_avec_secours(
+        get_eleves, cache_key="eleves", bouton_key="admin_eleves", label="Élèves",
+    )
+    if eleves is _SHEETS_ECHEC:
+        eleves = []
+    personnel = _lire_sheets_avec_secours(
+        get_personnel, cache_key="personnel", bouton_key="admin_personnel", label="Personnel",
+    )
+    if personnel is _SHEETS_ECHEC:
+        personnel = []
+
+    centres_derives: dict[str, dict] = {}
+    try:
+        centres_derives = get_centres_derives()
+    except GoogleSheetsError as exc:
+        st.warning(f"Centres indisponibles (Google Sheets injoignable) : {exc}")
+
+    # Centre vu très peu de fois : jamais bloqué ni corrigé, juste signalé
+    # ici pour que le docteur vérifie s'il s'agit d'une faute de frappe.
+    for info in centres_derives.values():
+        if info["suspect"]:
+            st.warning(
+                f"Centre vu {info['count']} fois seulement : {info['canonique']!r} — "
+                f"faute de frappe possible ?"
+            )
+
+    centres_a_afficher = sorted(info["canonique"] for info in centres_derives.values())
+    nb_copies = db.query(Copie).count()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Élèves", len(eleves) if eleves else "?")
+    with col2:
+        st.metric("Centres", len(centres_a_afficher))
+    with col3:
+        st.metric("Copies", nb_copies)
+
+    st.divider()
+    st.markdown("**Personnel par centre**")
+
+    def _classes_pour_centre(p: dict, centre_nom: str) -> list[str]:
+        """Un enseignant peut avoir plusieurs affectations dans un même
+        centre (ex : 6e ET 5e) — voir google_sheets._load_personnel."""
+        return [classe for centre, classe in p.get("affectations", []) if centre == centre_nom]
+
+    def _mention_pin(p: dict) -> str:
+        return "" if p.get("pin") else "  ·  PIN manquant"
+
+    _ROLES_CONNUS = {UserRole.admin.value, UserRole.responsable_centre.value, UserRole.enseignant.value}
+
+    for centre_nom in centres_a_afficher:
+        st.markdown(f"**{centre_nom}**")
+
+        administrateurs = [
+            p for p in personnel
+            if p.get("role") == UserRole.admin.value and _classes_pour_centre(p, centre_nom)
+        ]
+        if administrateurs:
+            st.write(f"Administrateurs ({len(administrateurs)}) :")
+            for p in administrateurs:
+                st.write(f"- {p.get('prenom', '')} {p.get('nom', '')}{_mention_pin(p)}")
+
+        responsables = [
+            p for p in personnel
+            if p.get("role") == UserRole.responsable_centre.value and _classes_pour_centre(p, centre_nom)
+        ]
+        if responsables:
+            st.write(f"Responsables ({len(responsables)}) :")
+            for p in responsables:
+                st.write(f"- {p.get('prenom', '')} {p.get('nom', '')}{_mention_pin(p)}")
+        else:
+            st.write("Responsables : aucun")
+
+        enseignants = [
+            p for p in personnel
+            if p.get("role") == UserRole.enseignant.value and _classes_pour_centre(p, centre_nom)
+        ]
+        if enseignants:
+            st.write(f"Enseignants ({len(enseignants)}) :")
+            for p in enseignants:
+                classes_txt = ", ".join(_classes_pour_centre(p, centre_nom)) or "classe non renseignée"
+                st.write(f"- {p.get('prenom', '')} {p.get('nom', '')} — {classes_txt}{_mention_pin(p)}")
+        else:
+            st.write("Enseignants : aucun")
+
+        autres = [
+            p for p in personnel
+            if p.get("role") not in _ROLES_CONNUS and _classes_pour_centre(p, centre_nom)
+        ]
+        if autres:
+            st.write(f"Rôle non reconnu dans le Sheet ({len(autres)}) :")
+            for p in autres:
+                st.write(f"- {p.get('prenom', '')} {p.get('nom', '')} — rôle Sheet : {p.get('role') or 'vide'}")
+
+        st.divider()
+
+    # Personnel sans centre renseigné (ex. administrateur) — jamais masqué,
+    # même s'il n'apparaît sous aucun centre ci-dessus.
+    sans_centre = [
+        p for p in personnel if not any(c for c, _cl in p.get("affectations", []))
+    ]
+    if sans_centre:
+        st.markdown("**Personnel sans centre renseigné**")
+        for p in sans_centre:
+            role_txt = p.get("role") or "rôle non renseigné"
+            st.write(f"- {p.get('prenom', '')} {p.get('nom', '')} ({role_txt}){_mention_pin(p)}")
+
+
+def _nettoyer_pour_nom_fichier(text: str) -> str:
+    """Retire accents/espaces/apostrophes/slashes et tout caractère non
+    alphanumérique (remplacé par un underscore) — pour rester un nom de
+    fichier valide à la fois sous Windows et sous Linux."""
+    normalized = unicodedata.normalize("NFD", text or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^A-Za-z0-9]+", "_", ascii_text).strip("_")
+
+
+def nom_fichier_document(*, nom: str, prenom: str, doc_type: str, date) -> str:
+    """Nom de fichier lisible pour un document téléchargé (scan/rapport/
+    remédiation) : NOM_Prenom_type_date (sans extension — l'appelant ajoute
+    .pdf/.jpg/...). Ne contient JAMAIS contact_parents (le numéro du parent
+    ne doit pas voyager dans des fichiers qui circulent — WhatsApp, email)
+    ni identifiant_hakili — seuls nom et prénom, comme affichés à l'écran.
+
+    À appliquer PARTOUT où un document est proposé au téléchargement
+    (traitement unique, traitement batch, vue Suivi)."""
+    nom_c = _nettoyer_pour_nom_fichier(nom).upper()
+    prenom_c = _nettoyer_pour_nom_fichier(prenom)
+    parts = [p for p in (nom_c, prenom_c) if p]
+    base = "_".join(parts) if parts else "eleve"
+    return f"{base}_{doc_type}_{date}"
+
+
+def _fold_token(text: str) -> str:
+    """Minuscule, sans accents, lettres/chiffres uniquement — pour comparer
+    un nom de fichier au nom/prénom d'un élève sans se soucier de la casse,
+    des accents ou du séparateur utilisé."""
+    normalized = unicodedata.normalize("NFD", text or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]", "", ascii_text)
+
+
+def _fold_texte(text: str) -> str:
+    """Comme _fold_token mais CONSERVE un espace entre les mots — sert de
+    base à une recherche insensible à l'ORDRE des mots (voir
+    _correspond_recherche) : "Sanou Feryel" doit retrouver "Feryel SANOU"
+    même si l'affichage montre le prénom avant le nom."""
+    normalized = unicodedata.normalize("NFD", text or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", " ", ascii_text).strip()
+
+
+def _correspond_recherche(requete: str, cible: str) -> bool:
+    """Vrai si chaque mot de `requete` apparaît (comme sous-chaîne, ordre
+    des mots ignoré) dans `cible` — insensible casse/accents. Une requête
+    vide correspond toujours. Utilisé par toutes les recherches nom/prénom
+    du projet (élèves, personnel) pour un comportement cohérent, qu'on
+    tape "Sanou Feryel" ou "Feryel Sanou"."""
+    mots_requete = _fold_texte(requete).split()
+    cible_repliee = _fold_texte(cible)
+    return all(mot in cible_repliee for mot in mots_requete)
+
+
+def _selectbox_recherchable(
+    label: str,
+    items: list[dict],
+    format_func,
+    key: str,
+    placeholder: str = "Sélectionner",
+) -> dict | None:
+    """Sélection dans une liste déroulante — st.selectbox est nativement
+    recherchable (taper dedans filtre les options), donc aucune barre de
+    recherche séparée n'est ajoutée ici (elle ferait doublon).
+
+    Placeholder sobre, sans tirets cadratin autour (ex. "Sélectionner un
+    élève", pas "— Sélectionner un élève —"). Retourne l'item sélectionné —
+    le libellé affiché (format_func) peut changer sans jamais affecter la
+    valeur technique retournée (ex. l'identifiant_hakili reste utilisé en
+    coulisse par l'appelant) — ou None si le placeholder est resté choisi."""
+    options = [placeholder] + [format_func(item) for item in items]
+    selection = st.selectbox(label, options=options, key=key)
+    if selection == placeholder:
+        return None
+    return items[options.index(selection) - 1]
+
+
+def _match_eleve_par_nom_fichier(filename_stem: str, eleves: list[dict]) -> dict | None:
+    """Mode batch : fait correspondre un fichier uploadé (nommé par convention
+    avec le nom et prénom de l'élève) à un élève des Google Sheets, sans
+    dépendre d'une sélection manuelle par fichier (peu pertinente pour 30
+    copies d'un coup — voir chantier pipeline/Sheets).
+
+    Retourne l'élève UNIQUEMENT si son nom ET son prénom (repliés, sans
+    accents/casse) apparaissent tous les deux dans les tokens du nom de
+    fichier, et qu'un seul élève correspond — sinon None (introuvable ou
+    ambigu), auquel cas l'appelant doit bloquer cette copie plutôt que deviner.
+    """
+    tokens_fichier = {
+        _fold_token(t) for t in re.split(r"[_\-\s]+", filename_stem) if t
+    }
+    matches = []
+    for eleve in eleves:
+        tokens_eleve = {_fold_token(eleve.get("nom", "")), _fold_token(eleve.get("prenom", ""))}
+        if all(tokens_eleve) and tokens_eleve <= tokens_fichier:
+            matches.append(eleve)
+    return matches[0] if len(matches) == 1 else None
+
+
+# ── Double rôle — sélecteur de casquette ─────────────────────────────────────
+
+_ROLES_VALIDES = {r.value for r in UserRole}
+_LABELS_CASQUETTE = {
+    UserRole.responsable_centre.value: "Responsable",
+    UserRole.enseignant.value: "Enseignant",
+    UserRole.admin.value: "Administrateur",
+}
+
+
+def _roles_valides_de(personne: dict) -> list[str]:
+    """Rôles reconnus (valeurs UserRole) d'une personne du Sheet personnel —
+    à partir de personne["roles"] (double rôle possible, voir
+    google_sheets._load_personnel) avec repli sur personne["role"] (rôle
+    principal) si "roles" est absent. Un rôle du Sheet non reconnu par
+    UserRole est simplement ignoré ici plutôt que de faire planter
+    l'aiguillage — l'erreur claire est déjà montrée à la connexion."""
+    roles = personne.get("roles") or ([personne["role"]] if personne.get("role") else [])
+    return [r for r in roles if r in _ROLES_VALIDES]
+
+
+def _vue_utilisateur_pour_casquette(personne: dict, casquette: str) -> dict:
+    """Construit le dict "utilisateur" attendu par les fonctions de
+    permission EXISTANTES (get_accessible_eleves/can_access_eleve) à partir
+    de la personne connectée et de la casquette ACTIVE choisie — pertinent
+    seulement en double rôle, voir chantier sélecteur de casquette.
+
+    N'aiguille QUE role_enum et affectations vers le périmètre de la
+    casquette choisie ; ne duplique aucune logique de permission ni aucune
+    vue.
+
+    Correction (audit) : la casquette Responsable donne accès à TOUT LE
+    CENTRE où la personne porte le rôle responsable — voir
+    personne["centres_responsable"] (google_sheets._load_personnel),
+    construit à partir du RÔLE de chaque ligne du Sheet, jamais de la
+    présence ou de l'absence d'une classe sur cette ligne. Dans les
+    données réelles, une ligne responsable porte quasi toujours aussi une
+    classe (ex. DIANE Abasse) : filtrer sur "classe is None" (ancienne
+    logique) ne retenait alors AUCUNE affectation et vidait silencieusement
+    l'accès du responsable à son propre centre. La casquette Enseignant,
+    elle, reste basée sur les affectations précises (centre + classe),
+    inchangée."""
+    vue = dict(personne)
+    vue["role_enum"] = UserRole(casquette)
+    if casquette == UserRole.enseignant.value:
+        vue["affectations"] = [a for a in personne.get("affectations", []) if a[1] is not None]
+    elif casquette == UserRole.responsable_centre.value:
+        vue["affectations"] = [
+            (centre, None) for centre in personne.get("centres_responsable", [])
+        ]
+    return vue
+
+
+# ── Échec doux sur coupure Google Sheets ─────────────────────────────────────
+
+_SHEETS_ECHEC = object()  # sentinelle : "rien à afficher pour l'instant"
+
+
+def _lire_sheets_avec_secours(action, *, cache_key: str, bouton_key: str, label: str):
+    """Exécute `action` (callable sans argument qui lit les Sheets, ex.
+    `lambda: get_accessible_eleves(user)`) en distinguant proprement une
+    coupure réseau d'un problème de configuration (voir
+    src.integrations.google_sheets.GoogleSheetsConnectiviteError /
+    GoogleSheetsConfigError) :
+
+    - CONFIGURATION (identifiant erroné, colonne manquante...) -> message
+      technique précis conservé, JAMAIS de repli silencieux (un vrai
+      problème à corriger ne doit jamais être masqué par d'anciennes
+      données) ; retourne _SHEETS_ECHEC.
+    - CONNECTIVITÉ (réseau/DNS/timeout) -> si aucune lecture n'a encore
+      réussi, message doux + bouton Réessayer, retourne _SHEETS_ECHEC ; si
+      une lecture a déjà réussi, `action()` a déjà servi ces données de
+      repli en coulisse (voir google_sheets._cached_avec_repli) — on
+      affiche alors juste un bandeau discret "hors ligne" avec l'heure de
+      la dernière synchro et un bouton Réessayer, sans jamais de stack
+      trace brute.
+
+    L'appelant doit traiter un retour == _SHEETS_ECHEC comme "rien à
+    afficher pour l'instant", jamais planter ni deviner."""
+    from src.integrations.google_sheets import (
+        GoogleSheetsConfigError, GoogleSheetsConnectiviteError, clear_cache, get_statut_lecture,
+    )
+    try:
+        resultat = action()
+    except GoogleSheetsConfigError as exc:
+        st.error(f"{label} indisponible(s) : {exc}")
+        return _SHEETS_ECHEC
+    except GoogleSheetsConnectiviteError:
+        st.warning(
+            "Connexion à Internet indisponible pour le moment. Vérifiez votre "
+            "connexion et réessayez."
+        )
+        if st.button("Réessayer", key=f"retry_{bouton_key}"):
+            clear_cache()
+            st.rerun()
+        return _SHEETS_ECHEC
+
+    statut = get_statut_lecture(cache_key)
+    if statut["mode"] == "repli":
+        heure = statut["derniere_synchro"].strftime("%H:%M") if statut["derniere_synchro"] else "?"
+        col_msg, col_btn = st.columns([5, 1])
+        with col_msg:
+            st.info(
+                f"Données affichées hors ligne (dernière synchro : {heure}). "
+                f"Reconnectez-vous pour mettre à jour."
+            )
+        with col_btn:
+            if st.button("Réessayer", key=f"retry_online_{bouton_key}"):
+                clear_cache()
+                st.rerun()
+    return resultat
 
 
 # ── PAGE : À PROPOS ───────────────────────────────────────────────────────────
@@ -949,26 +1801,49 @@ elif page == "TRAITEMENT UNIQUE":
 
     from src.knowledge.test_registry import get_registry as _get_registry
 
-    # ── Sélection du mode ─────────────────────────────────────────────────────
-    _registry = _get_registry()
-    _available = _registry.available_tests()
+    # ── Sélection élève (gauche) / test (droite) sur une seule ligne ──────────
+    from src.integrations.google_sheets import get_eleves
 
-    _MODE_OPTIONS = ["Test personnalisé"] + [
-        t.label for t in _available.values()
-    ]
-    _MODE_IDS = [""] + list(_available.keys())
+    col_eleve, col_test = st.columns(2, gap="large")
 
-    selected_mode_label = st.selectbox(
-        "Quel test a passé l'élève ?",
-        options=_MODE_OPTIONS,
-        help=(
-            "Sélectionnez le test Hakili correspondant — l'énoncé et le barème se chargent automatiquement. "
-            "Si vous utilisez votre propre test, choisissez « Test personnalisé »."
-        ),
-    )
-    selected_mode_idx = _MODE_OPTIONS.index(selected_mode_label)
-    bareme_id_single = _MODE_IDS[selected_mode_idx]
-    hakili_test = _registry.get_test(bareme_id_single) if bareme_id_single else None
+    with col_eleve:
+        _eleves_disponibles = _lire_sheets_avec_secours(
+            get_eleves, cache_key="eleves", bouton_key="single_eleves", label="Élèves",
+        )
+        if _eleves_disponibles is _SHEETS_ECHEC:
+            _eleves_disponibles = []
+
+        # Nom + prénom seulement — jamais classe/centre affichés ici, jamais
+        # contact_parents ni identifiant_hakili (donnée interne uniquement,
+        # utilisée en coulisse pour retrouver l'élève, jamais montrée).
+        selected_eleve = _selectbox_recherchable(
+            "Élève", _eleves_disponibles,
+            format_func=lambda e: f"{e['prenom']} {e['nom']}",
+            key="single_eleve_select",
+            placeholder="Sélectionner un élève",
+        )
+
+    with col_test:
+        # ── Sélection du mode ─────────────────────────────────────────────────
+        _registry = _get_registry()
+        _available = _registry.available_tests()
+
+        _MODE_OPTIONS = ["Test personnalisé"] + [
+            t.label for t in _available.values()
+        ]
+        _MODE_IDS = [""] + list(_available.keys())
+
+        selected_mode_label = st.selectbox(
+            "Quel test a passé l'élève ?",
+            options=_MODE_OPTIONS,
+            help=(
+                "Sélectionnez le test Hakili correspondant — l'énoncé et le barème se chargent automatiquement. "
+                "Si vous utilisez votre propre test, choisissez « Test personnalisé »."
+            ),
+        )
+        selected_mode_idx = _MODE_OPTIONS.index(selected_mode_label)
+        bareme_id_single = _MODE_IDS[selected_mode_idx]
+        hakili_test = _registry.get_test(bareme_id_single) if bareme_id_single else None
 
     # Pré-chargement du retriever RAG dès la sélection du test (singleton — ne charge qu'une fois)
     if hakili_test:
@@ -1057,7 +1932,9 @@ elif page == "TRAITEMENT UNIQUE":
 
     # ── Bouton Phase A ────────────────────────────────────────────────────────
     if st.button("Lancer la correction IA", use_container_width=False):
-        if not copy_files:
+        if selected_eleve is None:
+            st.error("Veuillez sélectionner l'élève dans la liste.")
+        elif not copy_files:
             st.error("Veuillez charger la copie de l'élève (PDF ou photo(s)).")
         elif len(copy_files) > 1 and any(f.name.lower().endswith(".pdf") for f in copy_files):
             st.error("Impossible de mélanger un PDF avec des images. Chargez soit 1 PDF, soit plusieurs images.")
@@ -1072,10 +1949,13 @@ elif page == "TRAITEMENT UNIQUE":
                 from src.ui.progress import PipelineProgressUI
 
                 runs_dir = Path(settings.runs_dir)
-                student_name = (
-                    Path(copy_files[0].name).stem.replace("_", " ").replace("-", " ").title()
-                )
-                copy_id = make_copy_id(student_name)
+                identifiant_hakili_single = selected_eleve["identifiant_hakili"]
+                student_name = f"{selected_eleve['prenom']} {selected_eleve['nom']}"
+                # Suffixe horodaté : un même élève peut soumettre plusieurs
+                # copies au fil du temps (voir Suivi > Comparaison) —
+                # identifiant_hakili seul ne suffit pas comme copy_id (clé
+                # primaire de COPIE), il doit rester unique par soumission.
+                copy_id = make_copy_id(identifiant_hakili_single, suffix=datetime.now().strftime("%Y%m%d%H%M%S"))
 
                 if hakili_test:
                     rubric = hakili_test.rubric
@@ -1113,6 +1993,7 @@ elif page == "TRAITEMENT UNIQUE":
 
                     phase_a_result = run_phase_a(
                         copy_id=copy_id,
+                        identifiant_hakili=identifiant_hakili_single,
                         student_name=student_name,
                         file_paths=saved_paths,
                         rubric=rubric,
@@ -1202,7 +2083,7 @@ elif page == "TRAITEMENT UNIQUE":
     # ── Résultats finaux (après Phase B) ─────────────────────────────────────
     if st.session_state.single_result is not None:
         st.divider()
-        _display_results(st.session_state.single_result)
+        _display_results(st.session_state.single_result, eleve=selected_eleve)
 
 
 # ── PAGE : TRAITEMENT BATCH ───────────────────────────────────────────────────
@@ -1214,6 +2095,8 @@ elif page == "TRAITEMENT BATCH":
         st.session_state.batch_results = None
     if "batch_errors" not in st.session_state:
         st.session_state.batch_errors = []
+    if "batch_eleves_par_copy_id" not in st.session_state:
+        st.session_state.batch_eleves_par_copy_id = {}
 
     from src.knowledge.test_registry import get_registry as _get_registry_batch
     _registry_batch = _get_registry_batch()
@@ -1299,7 +2182,11 @@ elif page == "TRAITEMENT BATCH":
         st.divider()
 
     st.markdown("#### Copies des élèves")
-    st.caption("Un fichier PDF ou photo par élève, nommé avec le prénom et nom de l'élève (ex : `sawadogo_aminata.pdf`).")
+    st.caption(
+        "Un fichier PDF ou photo par élève, nommé avec le prénom et nom de l'élève "
+        "(ex : `sawadogo_aminata.pdf`) — le nom et le prénom doivent correspondre à un "
+        "élève des Google Sheets, sinon cette copie sera bloquée avant tout traitement."
+    )
     copies_folder = st.file_uploader(
         "PDFs ou images",
         type=["pdf", "jpg", "jpeg", "png"],
@@ -1321,12 +2208,20 @@ elif page == "TRAITEMENT BATCH":
 
             from src.core.anonymizer import make_copy_id
             from src.core.config import settings
+            from src.integrations.google_sheets import get_eleves
             from src.pipeline.pipeline import run_single_copy
 
             runs_dir = Path(settings.runs_dir)
             results = []
             errors = []
+            eleves_par_copy_id: dict[str, dict] = {}
             total = len(copies_folder)
+
+            eleves_batch = _lire_sheets_avec_secours(
+                get_eleves, cache_key="eleves", bouton_key="batch_eleves", label="Élèves",
+            )
+            if eleves_batch is _SHEETS_ECHEC:
+                eleves_batch = []
 
             # Barème + énoncé communs
             if hakili_test_batch:
@@ -1360,15 +2255,31 @@ elif page == "TRAITEMENT BATCH":
                     subject_file_path_batch = subject_tmp_batch
 
                 for i, uploaded in enumerate(copies_folder):
-                    student_name_raw = (
-                        Path(uploaded.name).stem.replace("_", " ").replace("-", " ").title()
-                    )
-                    copy_id = make_copy_id(student_name_raw, str(i + 1))
-
+                    filename_stem = Path(uploaded.name).stem
                     batch_header.markdown(
-                        f"**Traitement en cours** — Copie {i + 1} / {total} : **{student_name_raw}**"
+                        f"**Traitement en cours** — Copie {i + 1} / {total} : **{filename_stem}**"
                     )
-                    global_bar.progress((i) / total)
+                    global_bar.progress(i / total)
+
+                    # Élève choisi implicitement par correspondance nom de fichier <->
+                    # Sheet élèves (une sélection manuelle par fichier n'a pas de sens
+                    # pour un lot de 30 copies) — mais toujours vérifié, jamais deviné :
+                    # aucune correspondance unique -> copie bloquée avant tout appel IA.
+                    matched_eleve = _match_eleve_par_nom_fichier(filename_stem, eleves_batch)
+                    if matched_eleve is None:
+                        errors.append(
+                            f"{filename_stem} : élève introuvable ou ambigu dans les Google "
+                            f"Sheets pour ce nom de fichier — copie non traitée."
+                        )
+                        continue
+
+                    identifiant_hakili_batch = matched_eleve["identifiant_hakili"]
+                    student_name_raw = f"{matched_eleve['prenom']} {matched_eleve['nom']}"
+                    copy_id = make_copy_id(
+                        identifiant_hakili_batch,
+                        suffix=f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{i + 1}",
+                    )
+                    eleves_par_copy_id[copy_id] = matched_eleve
 
                     # Progression par copie
                     with copy_progress_slot.container():
@@ -1383,6 +2294,7 @@ elif page == "TRAITEMENT BATCH":
                     try:
                         result = run_single_copy(
                             copy_id=copy_id,
+                            identifiant_hakili=identifiant_hakili_batch,
                             student_name=student_name_raw,
                             file_paths=[tmp_path],
                             rubric=rubric_batch,
@@ -1407,6 +2319,7 @@ elif page == "TRAITEMENT BATCH":
 
             st.session_state.batch_results = results
             st.session_state.batch_errors = errors
+            st.session_state.batch_eleves_par_copy_id = eleves_par_copy_id
 
     # ── Affichage persistant des résultats batch ───────────────────────────────
     if st.session_state.batch_results is not None:
@@ -1475,16 +2388,26 @@ elif page == "TRAITEMENT BATCH":
                             st.caption("Notions à consolider : " + " · ".join(gap_labels))
 
                     bc1, bc2 = st.columns(2)
-                    r_slug = (
-                        r.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
-                        if r.student_name else r.copy_id
-                    )
+                    r_eleve = st.session_state.batch_eleves_par_copy_id.get(r.copy_id)
+                    if r_eleve:
+                        def _r_stem(doc_type: str, _eleve=r_eleve) -> str:
+                            return nom_fichier_document(
+                                nom=_eleve.get("nom", ""), prenom=_eleve.get("prenom", ""),
+                                doc_type=doc_type, date=datetime.now().date(),
+                            )
+                    else:
+                        r_slug = (
+                            r.student_name.lower().replace(" ", "_").replace("'", "").replace("/", "")
+                            if r.student_name else r.copy_id
+                        )
+                        def _r_stem(doc_type: str, _slug=r_slug) -> str:
+                            return f"{doc_type}_{_slug}"
                     with bc1:
                         if r.pdf_path and r.pdf_path.exists():
                             st.download_button(
                                 "Rapport — Enseignant",
                                 data=r.pdf_path.read_bytes(),
-                                file_name=f"rapport_correction_{r_slug}.pdf",
+                                file_name=f"{_r_stem('rapport')}.pdf",
                                 mime="application/pdf",
                                 key=f"batch_pdf_{r.copy_id}",
                                 use_container_width=True,
@@ -1495,9 +2418,278 @@ elif page == "TRAITEMENT BATCH":
                             st.download_button(
                                 "Exercices — Élève",
                                 data=r.remediation_pdf_path.read_bytes(),
-                                file_name=f"sujet_remediation_{r_slug}.pdf",
+                                file_name=f"{_r_stem('remediation')}.pdf",
                                 mime="application/pdf",
                                 key=f"batch_rem_{r.copy_id}",
                                 use_container_width=True,
                             )
                             _pdf_preview_expander(r.remediation_pdf_path, key=f"batch_prev_rem_{r.copy_id}", nested=True)
+
+
+# ── PAGE : GESTION ────────────────────────────────────────────────────────────
+
+elif page == "GESTION":
+    _page_header("Gestion — Suivi d'élèves", "Suivi pédagogique et administration")
+
+    # État de connexion propre à cette section — indépendant des autres pages.
+    if "gestion_authenticated" not in st.session_state:
+        st.session_state.gestion_authenticated = False
+        st.session_state.gestion_user = None
+        st.session_state.gestion_casquette = None
+
+    # ── PAS LOGUÉ → Formulaire de connexion ───────────────────────────────────
+    if not st.session_state.gestion_authenticated:
+        st.warning("Veuillez vous connecter pour accéder à la gestion")
+        st.divider()
+
+        col1, _ = st.columns([1, 2])
+        with col1:
+            st.subheader("Connexion")
+
+            from src.integrations.google_sheets import get_personnel
+
+            _personnel_disponible = _lire_sheets_avec_secours(
+                get_personnel, cache_key="personnel", bouton_key="login_personnel", label="Personnel",
+            )
+            if _personnel_disponible is _SHEETS_ECHEC:
+                _personnel_disponible = []
+
+            personne_selectionnee = _selectbox_recherchable(
+                "Nom", _personnel_disponible,
+                format_func=lambda p: f"{p.get('prenom', '')} {p.get('nom', '')}",
+                key="gestion_personne_select",
+                placeholder="Sélectionner votre nom",
+            )
+
+            pin_saisi = st.text_input(
+                "Code PIN (4 chiffres)", type="password", max_chars=4, key="gestion_pin",
+            )
+
+            if st.button("Se connecter"):
+                resultat = authentifier(personne_selectionnee, pin_saisi)
+
+                if resultat.status == "pin_absent":
+                    if personne_selectionnee is None:
+                        st.error("Veuillez sélectionner votre nom dans la liste.")
+                    else:
+                        st.error(
+                            "Aucun code PIN n'a été configuré pour ce compte — "
+                            "contactez le docteur."
+                        )
+                elif resultat.status == "pin_incorrect":
+                    st.error("Code incorrect.")
+                else:
+                    personne = dict(resultat.personne)
+                    if not _roles_valides_de(personne):
+                        st.error(
+                            f"Rôle non reconnu dans le Sheet ({personne.get('role', '')!r}) — "
+                            f"contactez le docteur."
+                        )
+                    else:
+                        st.session_state.gestion_authenticated = True
+                        st.session_state.gestion_user = personne
+                        st.session_state.gestion_casquette = None
+                        st.success(f"Bienvenue {personne['prenom']} {personne['nom']}")
+                        st.rerun()
+
+    # ── LOGUÉ → Interface de gestion ──────────────────────────────────────────
+    else:
+        user_brut = st.session_state.gestion_user
+        roles = _roles_valides_de(user_brut)
+
+        if len(roles) > 1:
+            # Double rôle (détecté génériquement, voir
+            # google_sheets._load_personnel — jamais une liste de noms) :
+            # la personne choisit sa casquette active, et peut en changer à
+            # tout moment sans se déconnecter. Le choix n'aiguille que vers
+            # les vues EXISTANTES ci-dessous (responsable/enseignant),
+            # aucune nouvelle vue créée, aucun périmètre mélangé.
+            if st.session_state.get("gestion_casquette") not in roles:
+                # Défaut Responsable si disponible (documenté au rapport de
+                # chantier) plutôt que de bloquer sur un choix forcé — vue
+                # d'ensemble du centre, point d'entrée jugé le plus sûr.
+                st.session_state.gestion_casquette = (
+                    UserRole.responsable_centre.value
+                    if UserRole.responsable_centre.value in roles else roles[0]
+                )
+            st.success(f"Connecté : {user_brut['prenom']} {user_brut['nom']}")
+            casquette = st.radio(
+                "Vous voulez travailler comme :",
+                options=roles,
+                format_func=lambda r: _LABELS_CASQUETTE.get(r, r),
+                index=roles.index(st.session_state.gestion_casquette),
+                key="gestion_casquette_radio",
+                horizontal=True,
+            )
+            st.session_state.gestion_casquette = casquette
+        else:
+            casquette = roles[0]
+            st.success(
+                f"Connecté : {user_brut['prenom']} {user_brut['nom']} "
+                f"({_LABELS_CASQUETTE.get(casquette, casquette)})"
+            )
+
+        user = _vue_utilisateur_pour_casquette(user_brut, casquette)
+        is_admin = user["role_enum"] == UserRole.admin
+
+        db = SessionLocal()
+        try:
+            main_tab_labels = ["Suivi", "Admin"] if is_admin else ["Suivi"]
+            main_tabs = st.tabs(main_tab_labels)
+            tab_suivi = main_tabs[0]
+            tab_admin = main_tabs[1] if is_admin else None
+
+            # ── Onglet Suivi ───────────────────────────────────────────────
+            with tab_suivi:
+                eleves = _lire_sheets_avec_secours(
+                    lambda: get_accessible_eleves(user),
+                    cache_key="eleves", bouton_key="suivi_eleves", label="Élèves",
+                )
+
+                if eleves is _SHEETS_ECHEC:
+                    pass
+                elif user["role_enum"] == UserRole.enseignant:
+                    # Vue enseignant : UN seul écran (sélection d'UN élève
+                    # parmi les siens -> profil + copies + documents, qui
+                    # couvre déjà la chronologie) — pas d'onglets Historique/
+                    # Comparaison séparés ici : sur un périmètre aussi
+                    # restreint (ses seuls élèves), ils feraient double
+                    # emploi avec ce même contenu (voir rapport de chantier).
+                    st.subheader("Mes élèves")
+                    if not eleves:
+                        affectations_txt = ", ".join(
+                            f"{centre or '?'} / {classe or '?'}"
+                            for centre, classe in user.get("affectations", [])
+                        ) or "aucune affectation renseignée"
+                        st.info(f"Aucun élève trouvé pour vos affectations : {affectations_txt}.")
+                    else:
+                        _render_profil_enseignant(db, user, eleves)
+                else:
+                    sub_tab1, sub_tab2, sub_tab3 = st.tabs(
+                        ["Historique", "Tableau des élèves", "Comparaison"]
+                    )
+
+                    with sub_tab1:
+                        st.subheader("Historique d'un élève")
+                        if not eleves:
+                            st.info("Aucun élève accessible")
+                        else:
+                            eleve = _selectbox_recherchable(
+                                "Élève", eleves,
+                                format_func=lambda e: f"{e.get('prenom', '')} {e.get('nom', '')}",
+                                key="historique_eleve_select",
+                                placeholder="Sélectionner un élève",
+                            )
+                            if eleve is not None:
+                                if not can_access_eleve(db, user, eleve):
+                                    st.error("Vous n'avez pas accès à cet élève")
+                                else:
+                                    afficher_historique(eleve, db)
+
+                    with sub_tab2:
+                        st.subheader("Tableau des élèves")
+
+                        if not eleves:
+                            st.info("Aucun élève accessible")
+                        elif user["role_enum"] == UserRole.responsable_centre:
+                            # Vue dédiée responsable : pastille de tendance,
+                            # tri avec les baisses en premier — voir chantier
+                            # tendance. Couvre tout son centre (voir
+                            # correction de la casquette Responsable).
+                            _render_tableau_responsable(db, eleves)
+                        elif is_admin:
+                            # SEULE vue où contact_parents et identifiant_hakili
+                            # sont affichés : l'admin gère les inscriptions et
+                            # contacte les familles — exception validée, jamais
+                            # étendue aux autres rôles (voir rapport de chantier).
+                            import pandas as pd
+
+                            recherche_admin = st.text_input(
+                                "Rechercher un élève",
+                                key="admin_eleves_recherche",
+                                placeholder="Rechercher par nom ou prénom...",
+                            )
+                            eleves_affiches = eleves
+                            if recherche_admin.strip():
+                                eleves_affiches = [
+                                    e for e in eleves
+                                    if _correspond_recherche(
+                                        recherche_admin, f"{e.get('prenom', '')} {e.get('nom', '')}"
+                                    )
+                                ]
+
+                            st.write(
+                                f"**{len(eleves_affiches)} élève(s)** affiché(s) sur "
+                                f"{len(eleves)} accessible(s)"
+                            )
+
+                            df_eleves = pd.DataFrame([
+                                {
+                                    "Nom": eleve.get("nom"),
+                                    "Prénom": eleve.get("prenom"),
+                                    "Classe": eleve.get("classe"),
+                                    "Centre": eleve.get("centre"),
+                                    "École": eleve.get("ecole"),
+                                    "Boursier": eleve.get("boursier"),
+                                    "Redoublant": eleve.get("reprend_la_classe"),
+                                    # str() : Google Sheets renvoie parfois un numéro de
+                                    # téléphone en nombre (sans les espaces), parfois en
+                                    # texte (avec) — coercion uniforme pour un affichage
+                                    # cohérent et pour éviter une colonne pandas à types
+                                    # mixtes (int/str).
+                                    "Contact parents": str(eleve.get("contact_parents") or ""),
+                                    "Identifiant": eleve.get("identifiant_hakili"),
+                                }
+                                for eleve in eleves_affiches
+                            ])
+                            st.dataframe(
+                                df_eleves,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                        else:
+                            # Rôle reconnu mais sans vue dédiée ici (ne devrait
+                            # pas arriver, le rôle est déjà validé à la
+                            # connexion) — tableau minimal, JAMAIS de
+                            # contact_parents ni d'identifiant par défaut.
+                            import pandas as pd
+
+                            st.write(f"**{len(eleves)} élève(s)** accessible(s)")
+                            df_eleves = pd.DataFrame([
+                                {
+                                    "Nom": eleve.get("nom"),
+                                    "Prénom": eleve.get("prenom"),
+                                    "Classe": eleve.get("classe"),
+                                    "Centre": eleve.get("centre"),
+                                    "École": eleve.get("ecole"),
+                                    "Boursier": eleve.get("boursier"),
+                                    "Redoublant": eleve.get("reprend_la_classe"),
+                                }
+                                for eleve in eleves
+                            ])
+                            st.dataframe(
+                                df_eleves,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+                    with sub_tab3:
+                        if not eleves:
+                            st.info("Aucun élève accessible")
+                        else:
+                            _render_comparaison_view(db, user, eleves)
+
+            # ── Onglet Admin (visible admin uniquement) ───────────────────────
+            if tab_admin is not None:
+                with tab_admin:
+                    st.header("Administration")
+                    _admin_view_stats(db)
+
+            st.divider()
+            if st.button("Déconnexion"):
+                st.session_state.gestion_authenticated = False
+                st.session_state.gestion_user = None
+                st.session_state.gestion_casquette = None
+                st.rerun()
+        finally:
+            db.close()

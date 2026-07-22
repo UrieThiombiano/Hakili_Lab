@@ -20,6 +20,13 @@ data/outputs/
 *.pdf
 !docs/*.pdf
 
+# Logs applicatifs (peuvent contenir des noms d'élèves — données personnelles)
+logs/
+
+# Google Sheets — clé de compte de service (secret, jamais versionné)
+credentials/
+*.json
+
 # IDE
 .vscode/
 .idea/

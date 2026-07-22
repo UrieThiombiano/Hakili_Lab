@@ -45,5 +45,33 @@ class Settings(BaseSettings):
     runs_dir: str = "./runs"
     subject: str = "mathematics"
 
+    # Base de données (Neon Postgres — portail de consultation, optionnel)
+    database_url: str = ""
+    debug: bool = False
+
+    # Google Sheets (source de vérité élèves/personnel, compte de service —
+    # optionnel). Le personnel (enseignants, responsables, administrateur)
+    # vit dans un SEUL Sheet fusionné — le rôle de chaque personne vient de
+    # sa colonne "role", plus d'un fichier séparé par rôle (voir
+    # src/integrations/google_sheets.py).
+    google_service_account_file: str = ""
+    google_sheet_eleves_id: str = ""
+    google_sheet_personnel_id: str = ""
+
+    # DORMANT depuis le chantier connexion nom+PIN : l'administrateur est
+    # désormais une ligne du Sheet personnel comme les autres (role=
+    # administrateur + PIN), authentifiée par src.services.auth_service au
+    # même titre qu'un enseignant ou un responsable — ce champ n'est plus lu
+    # nulle part dans le code actif. Conservé (non supprimé) en config comme
+    # RECOMMANDATION d'accès de secours si les Sheets deviennent injoignables
+    # (aucun autre chemin de connexion n'existe plus dans ce cas) ; décision
+    # à trancher explicitement par le docteur — le retirer si jugé inutile,
+    # ou le re-brancher dans auth_service si l'accès de secours est voulu.
+    admin_emails: str = ""
+
+    @property
+    def admin_emails_list(self) -> list[str]:
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
+
 
 settings = Settings()

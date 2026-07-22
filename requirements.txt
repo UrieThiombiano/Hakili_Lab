@@ -17,21 +17,32 @@ pymupdf>=1.24.9        # wheel pré-compilé dispo 1.27+ pour Python 3.13 Window
 # --- Génération PDF ---
 reportlab==4.2.2
 jinja2==3.1.4
+markupsafe>=3.0.0     # utilisé directement dans pdf_report_html.py (pas seulement transitif via jinja2)
 xhtml2pdf>=0.2.14
 
 # --- Interface ---
 streamlit>=1.36.0
 pandas>=2.2.0
+openpyxl>=3.1.0        # Lecture .xlsx (import élèves en masse)
 
 # --- Fournisseurs IA ---
 anthropic>=0.40.0
-google-generativeai>=0.8.0
+google-genai>=1.0.0    # SDK unifié — gemini_client.py utilise `from google import genai`
 openai>=1.30.0        # DeepSeek (API compatible OpenAI)
 mistralai>=1.0.0,<2.0.0   # Mistral Small 3.1 — v2.x a changé l'API
 
 # --- Réseau & Robustesse ---
 httpx>=0.28.1
 tenacity==8.5.0
+
+# --- Base de données (portail de consultation Neon Postgres) ---
+sqlalchemy>=2.0.23
+alembic>=1.13.1
+psycopg2-binary>=2.9.9
+
+# --- Google Sheets (source de vérité élèves/profs, compte de service) ---
+gspread>=6.1.0,<7.0.0
+google-auth>=2.34.0
 
 # --- Qualité code (développement uniquement — ne pas inclure en prod) ---
 # pytest==8.3.2
