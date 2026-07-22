@@ -609,7 +609,8 @@ class ClaudeClient:
         Lit la première page de la copie et retourne le nom complet de l'élève.
         Cherche les champs NOM / PRENOM / NOM ET PRENOM / NAME typiques d'une
         feuille d'examen. Retourne une chaîne vide si rien n'est trouvé.
-        Utilise Haiku (tâche simple, coût minimal).
+        Fallback : appelé quand le client de transcription actif (Gemini par
+        défaut) n'a pas trouvé de nom ou a échoué.
         """
         logger.info("Claude extraction nom — modèle : %s | page : %s",
                     settings.claude_model_light, first_page.name)

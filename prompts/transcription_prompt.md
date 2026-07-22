@@ -29,6 +29,20 @@ Cela inclut :
 - Si une formule est ambiguë (écriture manuscrite peu claire), donne les interprétations possibles dans `formulas`.
 - Beaucoup de tests Hakili se remplissent **directement sur le sujet imprimé** : distingue ce qui est imprimé (énoncé) de ce que l'élève a ajouté à la main. Transcris le numéro et quelques mots de la consigne imprimée comme ancre, puis la réponse manuscrite de l'élève.
 
+## ⚠ Marquage de la confiance dans `content` — obligatoire
+
+L'enseignant relit ta transcription avant qu'elle parte au correcteur. Il doit repérer en un coup d'œil les endroits où tu n'es pas sûr, sans relire chaque mot. Marque donc directement dans `content` les passages où ta lecture est incertaine, avec **trois niveaux** :
+
+1. **Confiant (par défaut)** : texte normal, sans marquage. C'est le cas de la grande majorité du texte.
+2. **Incertain** (lecture plausible mais pas garantie — écriture ambiguë, chiffre qui pourrait être un autre, mot partiellement masqué) : encadre le passage douteux avec des chevrons doubles `⟦` et `⟧`, en gardant ta meilleure lecture à l'intérieur. Exemples : `⟦25⟧`, `x⟦²⟧`, `⟦Pythagore⟧`.
+3. **Illisible** (rien de fiable à proposer) : écris `[ILLISIBLE]` à la place du passage, comme prévu ci-dessus.
+
+Règles d'usage :
+- N'utilise `⟦…⟧` que pour un doute réel sur la lecture — pas pour signaler une erreur mathématique de l'élève (une réponse fausse mais clairement écrite n'est pas incertaine).
+- Marque uniquement le passage douteux, pas toute la ligne ou toute la réponse.
+- Chaque `⟦…⟧` doit correspondre à une entrée courte dans `uncertainties` expliquant le doute (ex : "chiffre des dizaines illisible, lu 2 ou 7").
+- N'utilise jamais `⟦` ou `⟧` ailleurs que pour ce marquage (ce ne sont pas des symboles mathématiques à transcrire).
+
 ## Questions à choix (QCM), cases et tableaux
 - **QCM** : indique précisément quelle option l'élève a marquée et comment : "réponse b) entourée", "croix devant la réponse a)", "réponse c) soulignée". Si plusieurs options sont marquées, dis-le. Si aucune n'est marquée, dis-le.
 - **VRAI/FAUX et textes à trous** : transcris ce que l'élève a écrit dans chaque case ou sur chaque pointillé, dans l'ordre : "a) FAUX  b) VRAI".
