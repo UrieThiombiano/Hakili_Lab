@@ -71,25 +71,31 @@ def _configure_logging() -> None:
 
 _configure_logging()
 
-import streamlit as st
+# Les imports ci-dessous doivent rester après sys.path.insert (ligne 13),
+# _purge_stale_src_modules() (lignes 35-36) et _configure_logging() (ligne 72) :
+# le path doit être prêt avant tout "from src...", les modules src.* stale
+# doivent être purgés avant leur (ré)import à chaud par Streamlit, et le
+# logger racine doit être configuré avant que ces imports ne loggent quoi
+# que ce soit. Ordre volontaire, non déplaçable en haut de fichier.
+import streamlit as st  # noqa: E402
 
-from src.core.tendance import calculer_tendance
-from src.db.database import SessionLocal
-from src.db.models import Copie, UserRole
-from src.integrations.google_sheets import get_eleve_by_identifiant
-from src.pipeline.math_format import (
+from src.core.tendance import calculer_tendance  # noqa: E402
+from src.db.database import SessionLocal  # noqa: E402
+from src.db.models import Copie, UserRole  # noqa: E402
+from src.integrations.google_sheets import get_eleve_by_identifiant  # noqa: E402
+from src.pipeline.math_format import (  # noqa: E402
     ascii_math_upgrade,
     humanize_ids_in_text,
     math_to_html,
 )
-from src.pipeline.text_structuring import series_title, split_question
-from src.services.auth_service import authentifier
-from src.services.copie_service import (
+from src.pipeline.text_structuring import series_title, split_question  # noqa: E402
+from src.services.auth_service import authentifier  # noqa: E402
+from src.services.copie_service import (  # noqa: E402
     get_copies_pour_identifiants,
     get_documents_for_copie,
     get_historique_eleve,
 )
-from src.services.user_service import can_access_eleve, get_accessible_eleves
+from src.services.user_service import can_access_eleve, get_accessible_eleves  # noqa: E402
 
 st.set_page_config(
     page_title="Hakili Lab — Correction IA",
@@ -783,7 +789,6 @@ def render_validation_table(grade, rubric=None) -> None:
     Affiche le tableau de validation enseignant et stocke les décisions dans
     st.session_state["teacher_decisions"] = { rubric_item_id: {"decision": str, "score": float} }.
     """
-    from src.models.domain import TeacherDecision
 
     if "teacher_decisions" not in st.session_state:
         st.session_state["teacher_decisions"] = {}
@@ -968,7 +973,6 @@ def _display_results(result, key_prefix: str = "", eleve: dict | None = None) ->
     with col_b:
         st.markdown(f"**Réponses incorrectes ({len(bad_qs)})**")
         for q in bad_qs:
-            max_s = q.score  # score IA = 0 → on affiche 0/max_score
             st.markdown(f"&nbsp;&nbsp;❌ `{q.rubric_item_id}` — 0 pt")
 
     if result.diagnostic:
@@ -2539,7 +2543,10 @@ elif page == "TRAITEMENT BATCH":
                 has_review = any(q.requires_review for q in r.grade.questions)
                 flag = "!" if has_review else "✓"
                 display_name = r.student_name or r.copy_id
-                _sf = lambda v: str(int(v)) if float(v) == int(float(v)) else f"{float(v):g}"
+
+                def _sf(v):
+                    return str(int(v)) if float(v) == int(float(v)) else f"{float(v):g}"
+
                 label = (
                     f"{flag}  {display_name} — "
                     f"{_sf(r.grade.total_score)}/{_sf(r.grade.total_possible)} pt(s)"

@@ -4,8 +4,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydantic import BaseModel
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -21,6 +19,8 @@ from src.models.domain import (
     RemediationSubject,
     TranscriptionResult,
 )
+
+logger = logging.getLogger(__name__)
 
 _MAX_PAGES_PER_BATCH = 3   # 3 pages par appel → 3× moins d'appels facturés
 _TOKENS_PER_BATCH = 4096  # 4096 nécessaire pour 3 pages de copie math sans troncature

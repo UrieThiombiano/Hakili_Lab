@@ -17,10 +17,10 @@ from markupsafe import Markup
 # Helpers de formatage mathématique partagés avec l'UI (src/pipeline/math_format.py).
 # Alias soulignés conservés : usages internes et tests existants inchangés.
 from src.pipeline.math_format import (
-    ascii_math_upgrade as _ascii_math_upgrade,
     humanize_ids_in_text as _humanize_ids_in_text,
     math_to_html as _math_to_html,
 )
+from src.pipeline.text_structuring import split_numbered_items as _split_steps
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,6 @@ _SENT_SPLIT = re.compile(r'(?<=[.!?])\s+(?=[A-ZÀÂÄÉÈÊËÎÏÔÖÙÛÜÇ])'
 # positionnelles, numéros sources ignorés et supprimés, numérotation
 # régénérée par le template. Les références "(Num. 4)" / "(Geo. 7)" issues
 # de _humanize_ids_in_text sont protégées par la garde anti-référence.
-from src.pipeline.text_structuring import split_numbered_items as _split_steps
 
 
 def _numbered_list_html(intro: str, steps: list[str]) -> Markup:

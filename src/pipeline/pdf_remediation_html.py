@@ -8,10 +8,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
-
 # Découpage question et titre de série : centralisés dans text_structuring
 # (partagés avec l'UI). Alias soulignés conservés : usages internes et tests
 # existants inchangés.
@@ -19,6 +15,10 @@ from src.pipeline.text_structuring import (
     series_title as _series_title,
     split_question as _split_question,
 )
+
+logger = logging.getLogger(__name__)
+
+_TEMPLATE_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 _MONTHS_FR = [
     "", "janvier", "février", "mars", "avril", "mai", "juin",

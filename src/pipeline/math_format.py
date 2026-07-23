@@ -127,7 +127,9 @@ def math_to_html(s: str) -> str:
     s = _SUP.sub(_sup_repl, s)
 
     # 3. Fractions : "(a/b)" puis fractions nues "a/b"
-    frac_html = lambda m: f'<sup>{m.group(1)}</sup>&frasl;<sub>{m.group(2)}</sub>'
+    def frac_html(m):
+        return f'<sup>{m.group(1)}</sup>&frasl;<sub>{m.group(2)}</sub>'
+
     s = _FRAC.sub(frac_html, s)
     s = _FRAC_BARE.sub(frac_html, s)
 

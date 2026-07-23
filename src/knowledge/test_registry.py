@@ -16,12 +16,16 @@ Utilisation dans le pipeline :
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from src.knowledge.answer_loader import get_answer_loader
+
+if TYPE_CHECKING:
+    from src.models.domain import Rubric
 
 logger = logging.getLogger(__name__)
 

@@ -43,7 +43,7 @@ def _step_html(key: str, label: str, state: str) -> str:
     weight = "600" if state == "active" else "400"
     bar = (
         '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;'
-        f'background:#4a90e2;margin-left:8px;animation:hk-blink 0.9s ease-in-out infinite;"></span>'
+        'background:#4a90e2;margin-left:8px;animation:hk-blink 0.9s ease-in-out infinite;"></span>'
         if state == "active" else ""
     )
     return (
@@ -257,7 +257,6 @@ class PipelineProgressUI:
             ring_class = "hk-logo-ring-done" if done else "hk-logo-ring"
             # SVG spinner : cercle de rayon 42, circonférence ≈ 264 → dasharray 66/198 = arc 25%
             arc_color = "#27ae60" if done else "#4a90e2"
-            spin_style = "" if done else ""
             logo_html = (
                 f'<div class="hk-logo-wrap">'
                 f'<div class="{ring_class}">'
